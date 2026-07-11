@@ -32,6 +32,7 @@ public sealed class WallpaperManager : IDisposable
     private readonly object _timerLock = new();
 
     private System.Threading.Timer? _updateTimer;
+    private DirectoryWatcher? _directoryWatcher;
     private List<MonitorAreaInfo> _monitors = new();
     private bool _isPreRenderedReady;
     private bool _isUpdating;
@@ -82,12 +83,15 @@ public sealed class WallpaperManager : IDisposable
     }
 
     /// <summary>
-    /// 壁紙マネージャーを初期化し、ディスプレイ構成のロードと初期タイマーのセットアップを行います。
+    /// 壁紙マネージャーを初期化し、ディスプレイ構成のロード、自動同期監視の開始、および初期タイマーのセットアップを行います。
     /// </summary>
     public async Task InitializeAsync()
     {
         await _dbManager.InitializeAsync();
         RefreshMonitorInfo();
+
+        var settings = _settingsManager.Load();
+        UpdateDirectoryWatcher(settings.TargetDirectory);
 
         // 起動時に次回分の壁紙を事前レンダリングしておく
         await PreRenderNextWallpaperAsync();
@@ -155,7 +159,7 @@ public sealed class WallpaperManager : IDisposable
     }
 
     /// <summary>
-    /// 設定ファイルの自動更新設定をロードし、タイマーを再起動します。
+    /// 設定ファイルの自動更新設定をロードし、タイマーおよび監視ディレクトリを再起動します。
     /// </summary>
     public void RestartTimer()
     {
@@ -167,6 +171,9 @@ public sealed class WallpaperManager : IDisposable
 
             var settings = _settingsManager.Load();
             Logger.LogInformation("現在の設定状況: AutoUpdateEnabled={AutoUpdateEnabled}, UpdateIntervalSeconds={UpdateIntervalSeconds}秒", settings.AutoUpdateEnabled, settings.UpdateIntervalSeconds);
+
+            // 監視ディレクトリの同期切り替え
+            UpdateDirectoryWatcher(settings.TargetDirectory);
 
             if (settings.AutoUpdateEnabled && settings.UpdateIntervalSeconds > 0)
             {
@@ -182,6 +189,32 @@ public sealed class WallpaperManager : IDisposable
             else
             {
                 Logger.LogWarning("自動更新が無効、または間隔値が不正なためタイマーは起動されませんでした。");
+            }
+        }
+    }
+
+    /// <summary>
+    /// 指定された対象ディレクトリに対するリアルタイム同期監視を切り替えます。
+    /// </summary>
+    /// <param name="targetDir">同期監視対象ディレクトリのパス</param>
+    private void UpdateDirectoryWatcher(string targetDir)
+    {
+        lock (_timerLock)
+        {
+            if (_directoryWatcher != null)
+            {
+                _directoryWatcher.Dispose();
+                _directoryWatcher = null;
+            }
+
+            if (!string.IsNullOrWhiteSpace(targetDir) && Directory.Exists(targetDir))
+            {
+                _directoryWatcher = new DirectoryWatcher(_dbManager, targetDir);
+                _directoryWatcher.Start();
+            }
+            else
+            {
+                Logger.LogWarning("監視対象ディレクトリが無効なため、同期監視は開始されませんでした。パス={Path}", targetDir);
             }
         }
     }
@@ -406,6 +439,9 @@ public sealed class WallpaperManager : IDisposable
         {
             _updateTimer?.Dispose();
             _updateTimer = null;
+
+            _directoryWatcher?.Dispose();
+            _directoryWatcher = null;
         }
 
         _disposed = true;
