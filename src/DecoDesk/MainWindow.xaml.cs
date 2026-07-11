@@ -14,6 +14,39 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+
+        if (DataContext is ViewModels.MainWindowViewModel viewModel)
+        {
+            viewModel.RequestClose += () => Close();
+        }
+    }
+
+    /// <summary>
+    /// 「参照...」ボタンのクリックイベント処理。モダンなフォルダ選択ダイアログを表示します。
+    /// </summary>
+    private void BrowseFolder_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFolderDialog
+        {
+            Title = "対象の画像フォルダを選択してください",
+            Multiselect = false
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            if (DataContext is ViewModels.MainWindowViewModel viewModel)
+            {
+                viewModel.TargetDirectory = dialog.FolderName;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 「閉じる」ボタンのクリックイベント処理。
+    /// </summary>
+    private void Close_Click(object sender, RoutedEventArgs e)
+    {
+        Close();
     }
 
     /// <summary>

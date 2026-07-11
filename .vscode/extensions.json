@@ -1,0 +1,13 @@
+{
+  "recommendations": [
+    // 1. C#・.NET 開発の必須環境
+    "ms-dotnettools.csharp",
+    "ms-dotnettools.csdevkit",
+
+    // 2. SQLite データベース確認用
+    "alexcvzz.vscode-sqlite",
+
+    // 3. 日本語化
+    "MS-CEINTL.vscode-language-pack-ja"
+  ]
+}

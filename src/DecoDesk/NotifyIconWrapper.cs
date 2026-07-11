@@ -55,11 +55,21 @@ public sealed class NotifyIconWrapper : IDisposable
 
     /// <summary>
     /// 設定画面（メインウィンドウ）を表示します。
+    /// 開くたびに最新の設定データを再ロードし、最小化されている場合は通常状態に戻します。
     /// </summary>
     private void ShowSettings()
     {
+        if (_mainWindow.DataContext is ViewModels.MainWindowViewModel viewModel)
+        {
+            viewModel.LoadSettings();
+        }
+
         if (_mainWindow.IsVisible)
         {
+            if (_mainWindow.WindowState == WindowState.Minimized)
+            {
+                _mainWindow.WindowState = WindowState.Normal;
+            }
             _mainWindow.Activate();
         }
         else

@@ -1,3 +1,4 @@
 <Solution>
+  <Project Path="../tests/DecoDesk.Tests/DecoDesk.Tests.csproj" />
   <Project Path="DecoDesk/DecoDesk.csproj" />
 </Solution>
