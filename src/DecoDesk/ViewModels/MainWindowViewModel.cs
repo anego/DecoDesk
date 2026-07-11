@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Input;
 using DecoDesk.Configuration;
 using DecoDesk.Database;
+using Microsoft.Extensions.Logging;
 
 namespace DecoDesk.ViewModels;
 
@@ -13,14 +14,20 @@ namespace DecoDesk.ViewModels;
 /// </summary>
 public sealed class MainWindowViewModel : ViewModelBase
 {
+    private static readonly ILogger Logger = DecoDesk.OS.AppLoggerFactory.CreateLogger<MainWindowViewModel>();
+
     private readonly SettingsManager _settingsManager;
     private readonly DatabaseManager _dbManager;
     private readonly ImageBulkIndexer _indexer;
 
     private string _targetDirectory = string.Empty;
-    private int _updateIntervalMinutes = 15;
+    private int _updateIntervalSeconds = 900;
     private string _processingMode = "None";
     private bool _autoUpdateEnabled;
+    private int _wallpaperImageCount = 6;
+    private int _wallpaperImageSize = 350;
+    private double _wallpaperDensity = 1.0;
+    private string _wallpaperBackgroundColor = "#2F4F4F";
 
     private bool _isIndexing;
     private double _progressValue;
@@ -44,13 +51,46 @@ public sealed class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// 設定項目「更新間隔（分）」のバインド用プロパティ
+    /// 設定項目「更新間隔（秒）」のバインド用プロパティ
     /// </summary>
-    public int UpdateIntervalMinutes
+    public int UpdateIntervalSeconds
     {
-        get => _updateIntervalMinutes;
-        set => SetProperty(ref _updateIntervalMinutes, value);
+        get => _updateIntervalSeconds;
+        set
+        {
+            if (SetProperty(ref _updateIntervalSeconds, value))
+            {
+                Logger.LogDebug("UpdateIntervalSeconds が変更されました: {NewValue}秒", value);
+            }
+        }
     }
+
+    /// <summary>
+    /// 自動更新の選択間隔オプションを表すデータモデルです。
+    /// </summary>
+    public record IntervalOption(string DisplayText, int Seconds);
+
+    /// <summary>
+    /// 設定画面の ComboBox に表示する更新間隔オプションのリストを取得します。
+    /// </summary>
+    public List<IntervalOption> IntervalOptions { get; } = new()
+    {
+        new IntervalOption("10秒", 10),
+        new IntervalOption("15秒", 15),
+        new IntervalOption("30秒", 30),
+        new IntervalOption("1分", 60),
+        new IntervalOption("2分", 120),
+        new IntervalOption("3分", 180),
+        new IntervalOption("5分", 300),
+        new IntervalOption("15分", 900),
+        new IntervalOption("30分", 1800),
+        new IntervalOption("1時間", 3600),
+        new IntervalOption("3時間", 10800),
+        new IntervalOption("12時間", 43200),
+        new IntervalOption("1日", 86400),
+        new IntervalOption("2日", 172800),
+        new IntervalOption("7日", 604800)
+    };
 
     /// <summary>
     /// 設定項目「画像加工モード」のバインド用プロパティ
@@ -58,7 +98,14 @@ public sealed class MainWindowViewModel : ViewModelBase
     public string ProcessingMode
     {
         get => _processingMode;
-        set => SetProperty(ref _processingMode, value);
+        set
+        {
+            if (SetProperty(ref _processingMode, value))
+            {
+                OnPropertyChanged(nameof(IsProcessingModeAdvanced));
+                OnPropertyChanged(nameof(IsPostcardModeSelected));
+            }
+        }
     }
 
     /// <summary>
@@ -69,6 +116,103 @@ public sealed class MainWindowViewModel : ViewModelBase
         get => _autoUpdateEnabled;
         set => SetProperty(ref _autoUpdateEnabled, value);
     }
+
+    /// <summary>
+    /// 合成に使用する画像数のバインド用プロパティ
+    /// </summary>
+    public int WallpaperImageCount
+    {
+        get => _wallpaperImageCount;
+        set => SetProperty(ref _wallpaperImageCount, value);
+    }
+
+    /// <summary>
+    /// 合成する画像の長辺のピクセルサイズを取得または設定します。
+    /// </summary>
+    public int WallpaperImageSize
+    {
+        get => _wallpaperImageSize;
+        set => SetProperty(ref _wallpaperImageSize, value);
+    }
+
+    /// <summary>
+    /// ポストカード加工時の背景カラーコードを取得または設定します。
+    /// </summary>
+    public string WallpaperBackgroundColor
+    {
+        get => _wallpaperBackgroundColor;
+        set
+        {
+            if (SetProperty(ref _wallpaperBackgroundColor, value))
+            {
+                OnPropertyChanged(nameof(BackgroundColorBrush));
+            }
+        }
+    }
+
+    /// <summary>
+    /// 設定画面のスライダーやTextBox背景色プレビューにバインドするためのブラシを取得します。
+    /// </summary>
+    public System.Windows.Media.Brush BackgroundColorBrush
+    {
+        get
+        {
+            try
+            {
+                var color = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(_wallpaperBackgroundColor);
+                return new System.Windows.Media.SolidColorBrush(color);
+            }
+            catch
+            {
+                return System.Windows.Media.Brushes.DarkSlateGray; // 解析失敗時のフォールバック
+            }
+        }
+    }
+
+    /// <summary>
+    /// 合成の配置密度のバインド用プロパティ (0.5 〜 1.5 倍率)
+    /// </summary>
+    public double WallpaperDensity
+    {
+        get => _wallpaperDensity;
+        set
+        {
+            if (SetProperty(ref _wallpaperDensity, value))
+            {
+                OnPropertyChanged(nameof(WallpaperDensityPercent));
+            }
+        }
+    }
+
+    /// <summary>
+    /// 設定画面のスライダーバインド用のプロパティ (50 〜 150 パーセント値)
+    /// </summary>
+    public double WallpaperDensityPercent
+    {
+        get => _wallpaperDensity * 100.0;
+        set
+        {
+            if (SetProperty(ref _wallpaperDensity, value / 100.0))
+            {
+                OnPropertyChanged(nameof(WallpaperDensity));
+            }
+        }
+    }
+
+    /// <summary>
+    /// カラーピッカーを起動するコマンドを取得します。
+    /// </summary>
+    public ICommand SelectColorCommand { get; }
+
+    /// <summary>
+    /// ポストカード風モードが選択されているかどうかを示すプロパティ
+    /// </summary>
+    public bool IsPostcardModeSelected => ProcessingMode == "Postcard";
+
+    /// <summary>
+    /// ポストカード/コルクボードなどの高度な加工モードが選択されているかどうかを示すプロパティ
+    /// </summary>
+    public bool IsProcessingModeAdvanced => ProcessingMode == "Postcard" || ProcessingMode == "Corkboard";
 
     /// <summary>
     /// インデックス作成を実行中かどうかを示すバインド用プロパティ
@@ -149,6 +293,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         _indexer = new ImageBulkIndexer(_dbManager);
 
         SaveCommand = new RelayCommand(SaveSettings, () => !IsIndexing);
+        SelectColorCommand = new RelayCommand(SelectColor);
         StartIndexingCommand = new RelayCommand(async () => await StartIndexingAsync(), () => !IsIndexing && !string.IsNullOrWhiteSpace(TargetDirectory));
         CancelIndexingCommand = new RelayCommand(CancelIndexing, () => IsIndexing);
 
@@ -161,36 +306,82 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// </summary>
     public void LoadSettings()
     {
+        Logger.LogInformation("設定ファイルからのロードを開始します。");
         var settings = _settingsManager.Load();
         TargetDirectory = settings.TargetDirectory;
-        UpdateIntervalMinutes = settings.UpdateIntervalMinutes;
+        UpdateIntervalSeconds = settings.UpdateIntervalSeconds;
         ProcessingMode = settings.ProcessingMode;
         AutoUpdateEnabled = settings.AutoUpdateEnabled;
+        WallpaperImageCount = settings.WallpaperImageCount;
+        WallpaperImageSize = settings.WallpaperImageSize;
+        WallpaperDensity = settings.WallpaperDensity;
+        WallpaperBackgroundColor = settings.WallpaperBackgroundColor;
         
+        Logger.LogInformation("設定ファイルのロードが完了しました: TargetDirectory={TargetDirectory}, UpdateIntervalSeconds={UpdateIntervalSeconds}秒, AutoUpdateEnabled={AutoUpdateEnabled}", 
+            TargetDirectory, UpdateIntervalSeconds, AutoUpdateEnabled);
+
         ProgressValue = 0;
         ProgressText = "設定を読み込みました。";
     }
 
     /// <summary>
+    /// カラーダイアログを表示して背景色を選択します。
+    /// </summary>
+    private void SelectColor()
+    {
+        using var dialog = new System.Windows.Forms.ColorDialog();
+        try
+        {
+            var color = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(WallpaperBackgroundColor);
+            dialog.Color = System.Drawing.Color.FromArgb(color.A, color.R, color.G, color.B);
+        }
+        catch
+        {
+            dialog.Color = System.Drawing.Color.FromArgb(47, 79, 79); // デフォルト #2F4F4F
+        }
+
+        if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+        {
+            WallpaperBackgroundColor = $"#{dialog.Color.R:X2}{dialog.Color.G:X2}{dialog.Color.B:X2}";
+        }
+    }
+
+    /// <summary>
     /// 現在のプロパティ値をもとに設定をローカルファイルに保存します。
     /// </summary>
-    private void SaveSettings()
+    private async void SaveSettings()
     {
+        Logger.LogInformation("設定の保存処理を開始します。");
         try
         {
             var settings = new AppSettings
             {
                 TargetDirectory = TargetDirectory,
-                UpdateIntervalMinutes = UpdateIntervalMinutes,
+                UpdateIntervalSeconds = UpdateIntervalSeconds,
                 ProcessingMode = ProcessingMode,
-                AutoUpdateEnabled = AutoUpdateEnabled
+                AutoUpdateEnabled = AutoUpdateEnabled,
+                WallpaperImageCount = WallpaperImageCount,
+                WallpaperImageSize = WallpaperImageSize,
+                WallpaperDensity = WallpaperDensity,
+                WallpaperBackgroundColor = WallpaperBackgroundColor
             };
+            Logger.LogInformation("保存対象の設定データ: TargetDirectory={TargetDirectory}, UpdateIntervalSeconds={UpdateIntervalSeconds}秒, AutoUpdateEnabled={AutoUpdateEnabled}", 
+                settings.TargetDirectory, settings.UpdateIntervalSeconds, settings.AutoUpdateEnabled);
+
             _settingsManager.Save(settings);
+            Logger.LogInformation("設定ファイルのディスク保存に成功しました。");
+
+            OS.WallpaperManager.Instance.RestartTimer();
+
+            // 新しいモード等をもとに即時に事前レンダリングバッファを再作成
+            await OS.WallpaperManager.Instance.RecreatePreRenderedWallpaperAsync();
+
             System.Windows.MessageBox.Show("設定を適用・保存しました。", "DecoDesk", MessageBoxButton.OK, MessageBoxImage.Information);
             RequestClose?.Invoke();
         }
         catch (Exception ex)
         {
+            Logger.LogError(ex, "設定の保存またはタイマーの再起動中に例外が発生しました。");
             System.Windows.MessageBox.Show($"設定の保存に失敗しました: {ex.Message}", "DecoDesk", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }

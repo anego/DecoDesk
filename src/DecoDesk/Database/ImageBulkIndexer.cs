@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using System.IO;
 using Microsoft.Data.Sqlite;
 using DecoDesk.IO;
 
@@ -40,6 +41,9 @@ public sealed class ImageBulkIndexer
     {
         // データベースの初期化を確認
         await _dbManager.InitializeAsync();
+
+        // 走査対象外（変更前の古いフォルダ等）の不要なレコードをDBからクリーンアップ
+        await DeleteOrphanedRecordsAsync(rootPath);
 
         // 1. ファイルを列挙する
         var imageFiles = FileEnumerator.EnumerateImageFiles(rootPath);
@@ -145,5 +149,30 @@ public sealed class ImageBulkIndexer
             insertCommand?.Dispose();
             transaction?.Dispose();
         }
+    }
+
+    /// <summary>
+    /// 指定されたルートパス配下に属さない古い画像レコードをデータベースから削除します。
+    /// </summary>
+    private async Task DeleteOrphanedRecordsAsync(string rootPath)
+    {
+        string normRoot = rootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string pattern1 = normRoot + Path.DirectorySeparatorChar + "%";
+        string pattern2 = normRoot + Path.AltDirectorySeparatorChar + "%";
+
+        using var connection = _dbManager.CreateConnection();
+        await connection.OpenAsync();
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+            DELETE FROM Images 
+            WHERE Path <> @Root 
+              AND Path NOT LIKE @Pattern1 
+              AND Path NOT LIKE @Pattern2;
+        ";
+        command.Parameters.AddWithValue("@Root", normRoot);
+        command.Parameters.AddWithValue("@Pattern1", pattern1);
+        command.Parameters.AddWithValue("@Pattern2", pattern2);
+
+        await command.ExecuteNonQueryAsync();
     }
 }

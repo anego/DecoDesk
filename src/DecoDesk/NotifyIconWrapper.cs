@@ -79,11 +79,18 @@ public sealed class NotifyIconWrapper : IDisposable
     }
 
     /// <summary>
-    /// 即座に壁紙を更新する処理を実行します（現時点ではダミー処理）。
+    /// 即座に壁紙を更新する処理を実行します。
     /// </summary>
-    private void ChangeWallpaperNow(object? sender, EventArgs e)
+    private async void ChangeWallpaperNow(object? sender, EventArgs e)
     {
-        System.Windows.MessageBox.Show("壁紙を変更します（ダミー処理）", "DecoDesk", MessageBoxButton.OK, MessageBoxImage.Information);
+        try
+        {
+            await OS.WallpaperManager.Instance.TriggerUpdateNowAsync();
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show($"壁紙の更新中にエラーが発生しました:\n{ex.Message}", "DecoDesk", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     /// <summary>

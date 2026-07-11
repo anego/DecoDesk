@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 
 namespace DecoDesk.Configuration;
 
@@ -9,6 +10,8 @@ namespace DecoDesk.Configuration;
 /// </summary>
 public sealed class SettingsManager
 {
+    private static readonly ILogger Logger = OS.AppLoggerFactory.CreateLogger<SettingsManager>();
+
     private readonly string _settingsFilePath;
     private readonly object _lockObject = new();
 
@@ -54,16 +57,43 @@ public sealed class SettingsManager
             {
                 if (!File.Exists(_settingsFilePath))
                 {
+                    Logger.LogWarning("設定ファイルが存在しないため、デフォルト設定を適用します。ファイルパス={FilePath}", _settingsFilePath);
                     return AppSettings.CreateDefault();
                 }
 
                 var json = File.ReadAllText(_settingsFilePath);
                 var settings = JsonSerializer.Deserialize<AppSettings>(json);
-                return settings ?? AppSettings.CreateDefault();
+                if (settings == null)
+                {
+                    Logger.LogWarning("設定ファイルのデシリアライズ結果が null でした。デフォルト設定を適用します。");
+                    return AppSettings.CreateDefault();
+                }
+
+                // 互換性マイグレーション：json 内に UpdateIntervalMinutes があり、UpdateIntervalSeconds が無い場合
+                if (json.Contains("UpdateIntervalMinutes") && !json.Contains("UpdateIntervalSeconds"))
+                {
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(json);
+                        if (doc.RootElement.TryGetProperty("UpdateIntervalMinutes", out var minProp))
+                        {
+                            int mins = minProp.GetInt32();
+                            settings.UpdateIntervalSeconds = mins * 60;
+                            Logger.LogInformation("旧設定形式からマイグレーションを実行しました: UpdateIntervalMinutes={Minutes}分 -> UpdateIntervalSeconds={Seconds}秒", mins, settings.UpdateIntervalSeconds);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogWarning(ex, "互換マイグレーション中にエラーが発生しました。");
+                    }
+                }
+
+                Logger.LogInformation("設定ファイルを読み込みました。ファイルパス={FilePath}, UpdateIntervalSeconds={IntervalSeconds}秒", _settingsFilePath, settings.UpdateIntervalSeconds);
+                return settings;
             }
-            catch
+            catch (Exception ex)
             {
-                // 読み込みに失敗した場合は破損とみなし、安全のためデフォルトを返す
+                Logger.LogError(ex, "設定ファイルの読み込みまたはデシリアライズ中にエラーが発生しました。デフォルト設定を適用します。パス={FilePath}", _settingsFilePath);
                 return AppSettings.CreateDefault();
             }
         }
@@ -93,9 +123,11 @@ public sealed class SettingsManager
                 };
                 var json = JsonSerializer.Serialize(settings, options);
                 File.WriteAllText(_settingsFilePath, json);
+                Logger.LogInformation("設定の書き出しに成功しました。ファイルパス={FilePath}, サイズ={Size}バイト", _settingsFilePath, json.Length);
             }
             catch (Exception ex)
             {
+                Logger.LogError(ex, "設定の書き出し中にエラーが発生しました。パス={FilePath}", _settingsFilePath);
                 throw new InvalidOperationException("設定の保存に失敗しました。", ex);
             }
         }

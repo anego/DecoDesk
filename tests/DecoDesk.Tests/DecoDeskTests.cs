@@ -200,16 +200,24 @@ public sealed class DecoDeskTests : IDisposable
         Assert.NotNull(defaultSettings);
         Assert.Empty(defaultSettings.TargetDirectory);
         Assert.False(defaultSettings.AutoUpdateEnabled);
-        Assert.Equal(15, defaultSettings.UpdateIntervalMinutes);
+        Assert.Equal(900, defaultSettings.UpdateIntervalSeconds);
         Assert.Equal("None", defaultSettings.ProcessingMode);
+        Assert.Equal(6, defaultSettings.WallpaperImageCount);
+        Assert.Equal(350, defaultSettings.WallpaperImageSize);
+        Assert.Equal(1.0, defaultSettings.WallpaperDensity);
+        Assert.Equal("#2F4F4F", defaultSettings.WallpaperBackgroundColor);
 
         // 2. 設定を変更して保存
         var newSettings = new AppSettings
         {
             TargetDirectory = @"C:\MockImages",
             AutoUpdateEnabled = true,
-            UpdateIntervalMinutes = 30,
-            ProcessingMode = "Postcard"
+            UpdateIntervalSeconds = 1800,
+            ProcessingMode = "Postcard",
+            WallpaperImageCount = 8,
+            WallpaperImageSize = 400,
+            WallpaperDensity = 1.2,
+            WallpaperBackgroundColor = "#123456"
         };
         manager.Save(newSettings);
 
@@ -221,7 +229,28 @@ public sealed class DecoDeskTests : IDisposable
         Assert.NotNull(loadedSettings);
         Assert.Equal(@"C:\MockImages", loadedSettings.TargetDirectory);
         Assert.True(loadedSettings.AutoUpdateEnabled);
-        Assert.Equal(30, loadedSettings.UpdateIntervalMinutes);
+        Assert.Equal(1800, loadedSettings.UpdateIntervalSeconds);
         Assert.Equal("Postcard", loadedSettings.ProcessingMode);
+        Assert.Equal(8, loadedSettings.WallpaperImageCount);
+        Assert.Equal(400, loadedSettings.WallpaperImageSize);
+        Assert.Equal(1.2, loadedSettings.WallpaperDensity);
+        Assert.Equal("#123456", loadedSettings.WallpaperBackgroundColor);
+    }
+
+    [Fact]
+    public void DumpMonitorsTest()
+    {
+        try
+        {
+            var monitors = OS.WallpaperInterop.GetDisplayMonitors();
+            foreach (var m in monitors)
+            {
+                Console.WriteLine($"MONITOR_DUMP: ID={m.MonitorId}, Width={m.Width}, Height={m.Height}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"MONITOR_DUMP_ERROR: {ex.Message}");
+        }
     }
 }

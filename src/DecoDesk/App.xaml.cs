@@ -17,7 +17,7 @@ public partial class App : System.Windows.Application
     /// </summary>
     /// <param name="sender">イベントの発生元</param>
     /// <param name="e">イベント引数</param>
-    private void App_OnStartup(object sender, StartupEventArgs e)
+    private async void App_OnStartup(object sender, StartupEventArgs e)
     {
         // 二重起動の検知と防止
         _mutex = new Mutex(true, MutexName, out bool createdNew);
@@ -34,6 +34,16 @@ public partial class App : System.Windows.Application
 
         // タスクトレイ常駐アイコンの生成
         _notifyIconWrapper = new NotifyIconWrapper(mainWindow);
+
+        // 壁紙エンジンの非同期初期化
+        try
+        {
+            await OS.WallpaperManager.Instance.InitializeAsync();
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show($"壁紙エンジンの初期化に失敗しました:\n{ex.Message}", "DecoDesk", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     /// <summary>
@@ -44,6 +54,9 @@ public partial class App : System.Windows.Application
     {
         // 常駐アイコンのリソース解放
         _notifyIconWrapper?.Dispose();
+
+        // 壁紙マネージャーのリソース解放
+        OS.WallpaperManager.Instance.Dispose();
 
         // Mutexの解放
         if (_mutex != null)
