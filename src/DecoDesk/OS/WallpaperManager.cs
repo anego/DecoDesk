@@ -32,7 +32,7 @@ public sealed class WallpaperManager : IDisposable
     private readonly object _timerLock = new();
 
     private System.Threading.Timer? _updateTimer;
-    private DirectoryWatcher? _directoryWatcher;
+    private readonly List<DirectoryWatcher> _directoryWatchers = new();
     private List<MonitorAreaInfo> _monitors = new();
     private bool _isPreRenderedReady;
     private bool _isUpdating;
@@ -91,7 +91,7 @@ public sealed class WallpaperManager : IDisposable
         RefreshMonitorInfo();
 
         var settings = _settingsManager.Load();
-        UpdateDirectoryWatcher(settings.TargetDirectory);
+        UpdateDirectoryWatchers(settings.TargetDirectories);
 
         // 起動時に次回分の壁紙を事前レンダリングしておく
         await PreRenderNextWallpaperAsync();
@@ -173,7 +173,7 @@ public sealed class WallpaperManager : IDisposable
             Logger.LogInformation("現在の設定状況: AutoUpdateEnabled={AutoUpdateEnabled}, UpdateIntervalSeconds={UpdateIntervalSeconds}秒", settings.AutoUpdateEnabled, settings.UpdateIntervalSeconds);
 
             // 監視ディレクトリの同期切り替え
-            UpdateDirectoryWatcher(settings.TargetDirectory);
+            UpdateDirectoryWatchers(settings.TargetDirectories);
 
             if (settings.AutoUpdateEnabled && settings.UpdateIntervalSeconds > 0)
             {
@@ -194,27 +194,33 @@ public sealed class WallpaperManager : IDisposable
     }
 
     /// <summary>
-    /// 指定された対象ディレクトリに対するリアルタイム同期監視を切り替えます。
+    /// 指定された複数の対象ディレクトリに対するリアルタイム同期監視を切り替えます。
     /// </summary>
-    /// <param name="targetDir">同期監視対象ディレクトリのパス</param>
-    private void UpdateDirectoryWatcher(string targetDir)
+    /// <param name="targetDirs">同期監視対象ディレクトリのパスリスト</param>
+    private void UpdateDirectoryWatchers(System.Collections.Generic.IEnumerable<string> targetDirs)
     {
         lock (_timerLock)
         {
-            if (_directoryWatcher != null)
+            foreach (var watcher in _directoryWatchers)
             {
-                _directoryWatcher.Dispose();
-                _directoryWatcher = null;
+                watcher.Dispose();
             }
+            _directoryWatchers.Clear();
 
-            if (!string.IsNullOrWhiteSpace(targetDir) && Directory.Exists(targetDir))
+            if (targetDirs == null) return;
+
+            foreach (var dir in targetDirs)
             {
-                _directoryWatcher = new DirectoryWatcher(_dbManager, targetDir);
-                _directoryWatcher.Start();
-            }
-            else
-            {
-                Logger.LogWarning("監視対象ディレクトリが無効なため、同期監視は開始されませんでした。パス={Path}", targetDir);
+                if (!string.IsNullOrWhiteSpace(dir) && Directory.Exists(dir))
+                {
+                    var watcher = new DirectoryWatcher(_dbManager, dir);
+                    watcher.Start();
+                    _directoryWatchers.Add(watcher);
+                }
+                else
+                {
+                    Logger.LogWarning("監視対象ディレクトリが無効なため、同期監視は開始されませんでした。パス={Path}", dir);
+                }
             }
         }
     }
@@ -295,10 +301,23 @@ public sealed class WallpaperManager : IDisposable
         RefreshMonitorInfo();
 
         var settings = _settingsManager.Load();
-        var targetDir = settings.TargetDirectory;
+        var targetDirs = settings.TargetDirectories;
 
-        // 対象フォルダ未設定、または画像がDBに登録されていない場合は処理不可
-        if (string.IsNullOrWhiteSpace(targetDir) || !Directory.Exists(targetDir) || !_monitors.Any())
+        // ディレクトリが1つもないか、すべて無効な場合は処理不可
+        bool hasValidDir = false;
+        if (targetDirs != null)
+        {
+            foreach (var dir in targetDirs)
+            {
+                if (!string.IsNullOrWhiteSpace(dir) && Directory.Exists(dir))
+                {
+                    hasValidDir = true;
+                    break;
+                }
+            }
+        }
+
+        if (!hasValidDir || !_monitors.Any())
         {
             return;
         }
@@ -440,8 +459,11 @@ public sealed class WallpaperManager : IDisposable
             _updateTimer?.Dispose();
             _updateTimer = null;
 
-            _directoryWatcher?.Dispose();
-            _directoryWatcher = null;
+            foreach (var watcher in _directoryWatchers)
+            {
+                watcher.Dispose();
+            }
+            _directoryWatchers.Clear();
         }
 
         _disposed = true;

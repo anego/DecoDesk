@@ -169,7 +169,7 @@ public sealed class DecoDeskTests : IDisposable
         var progress = new Progress<ImageBulkIndexer.IndexProgress>(p => progressList.Add(p));
 
         // Act
-        await indexer.RunIndexAsync(rootDir, progress);
+        await indexer.RunIndexAsync(new[] { rootDir }, progress);
 
         // 進捗イベントのキュー処理完了を少し待つ
         await Task.Delay(150);
@@ -198,7 +198,7 @@ public sealed class DecoDeskTests : IDisposable
         // 1. 初回ロード（ファイル未存在）でデフォルト値が返ることを確認
         var defaultSettings = manager.Load();
         Assert.NotNull(defaultSettings);
-        Assert.Empty(defaultSettings.TargetDirectory);
+        Assert.Empty(defaultSettings.TargetDirectories);
         Assert.False(defaultSettings.AutoUpdateEnabled);
         Assert.Equal(900, defaultSettings.UpdateIntervalSeconds);
         Assert.Equal("None", defaultSettings.ProcessingMode);
@@ -210,7 +210,7 @@ public sealed class DecoDeskTests : IDisposable
         // 2. 設定を変更して保存
         var newSettings = new AppSettings
         {
-            TargetDirectory = @"C:\MockImages",
+            TargetDirectories = new System.Collections.Generic.List<string> { @"C:\MockImages" },
             AutoUpdateEnabled = true,
             UpdateIntervalSeconds = 1800,
             ProcessingMode = "Postcard",
@@ -227,7 +227,8 @@ public sealed class DecoDeskTests : IDisposable
 
         // Assert
         Assert.NotNull(loadedSettings);
-        Assert.Equal(@"C:\MockImages", loadedSettings.TargetDirectory);
+        Assert.Single(loadedSettings.TargetDirectories);
+        Assert.Equal(@"C:\MockImages", loadedSettings.TargetDirectories[0]);
         Assert.True(loadedSettings.AutoUpdateEnabled);
         Assert.Equal(1800, loadedSettings.UpdateIntervalSeconds);
         Assert.Equal("Postcard", loadedSettings.ProcessingMode);

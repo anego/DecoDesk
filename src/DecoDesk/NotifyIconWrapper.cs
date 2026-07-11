@@ -22,13 +22,31 @@ public sealed class NotifyIconWrapper : IDisposable
     {
         _mainWindow = mainWindow ?? throw new ArgumentNullException(nameof(mainWindow));
 
-        // NotifyIconの初期化。標準のアプリケーションアイコンを使用
+        // NotifyIconの初期化。埋め込みリソースからアイコンを読み込む
         _notifyIcon = new NotifyIcon
         {
-            Icon = SystemIcons.Application,
             Text = "DecoDesk",
             Visible = true
         };
+
+        try
+        {
+            var uri = new Uri("pack://application:,,,/icon.ico");
+            var streamResourceInfo = System.Windows.Application.GetResourceStream(uri);
+            if (streamResourceInfo != null)
+            {
+                using var stream = streamResourceInfo.Stream;
+                _notifyIcon.Icon = new System.Drawing.Icon(stream);
+            }
+            else
+            {
+                _notifyIcon.Icon = SystemIcons.Application;
+            }
+        }
+        catch
+        {
+            _notifyIcon.Icon = SystemIcons.Application;
+        }
 
         // ダブルクリックで設定画面を表示
         _notifyIcon.DoubleClick += (s, e) => ShowSettings();

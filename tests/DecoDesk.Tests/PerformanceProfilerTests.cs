@@ -196,7 +196,7 @@ public sealed class PerformanceProfilerTests : IDisposable
         }
 
         var stopwatch = Stopwatch.StartNew();
-        await indexer.RunIndexAsync(mockImageDir);
+        await indexer.RunIndexAsync(new[] { mockImageDir });
         stopwatch.Stop();
 
         // 100件のヘッダ解析＋DB登録が1.5秒以内に完了することを検証
@@ -208,5 +208,92 @@ public sealed class PerformanceProfilerTests : IDisposable
         command.CommandText = "SELECT COUNT(*) FROM Images;";
         var count = (long)(await command.ExecuteScalarAsync() ?? 0L);
         Assert.Equal(100L, count);
+    }
+
+    /// <summary>
+    /// 旧形式の単一ディレクトリ設定（TargetDirectory）を含む JSON から読み込んだ際に、
+    /// 新形式の複数ディレクトリリスト（TargetDirectories）へ正しくマイグレーションされることを検証します。
+    /// </summary>
+    [Fact]
+    public void SettingsMigration_ShouldConvertSingleTargetDirectoryToMultipleList()
+    {
+        var settingsFile = Path.Combine(_tempDir, "migration_settings.json");
+        var legacyJson = "{\"TargetDirectory\":\"C:\\\\Users\\\\sefer\\\\Pictures\",\"UpdateIntervalSeconds\":60}";
+        File.WriteAllText(settingsFile, legacyJson);
+
+        var manager = new DecoDesk.Configuration.SettingsManager(settingsFile);
+        var settings = manager.Load();
+
+        Assert.NotNull(settings.TargetDirectories);
+        Assert.Single(settings.TargetDirectories);
+        Assert.Equal("C:\\Users\\sefer\\Pictures", settings.TargetDirectories[0]);
+    }
+
+    /// <summary>
+    /// 複数登録されたフォルダのうち、一部が除外されて再スキャンが実行された際、
+    /// 除外されたフォルダ配下の画像レコードのみが SQLite DB から適切にクリーンアップされることを検証します。
+    /// </summary>
+    [Fact]
+    public async Task DeleteOrphanedRecords_ShouldOnlyRemoveImagesOutsideRegisteredDirectories()
+    {
+        var dbManager = new DatabaseManager(_dbPath);
+        await dbManager.InitializeAsync();
+
+        var indexer = new ImageBulkIndexer(dbManager);
+
+        var dir1 = Path.Combine(_tempDir, "Dir1");
+        var dir2 = Path.Combine(_tempDir, "Dir2");
+        var dir3 = Path.Combine(_tempDir, "Dir3");
+
+        Directory.CreateDirectory(dir1);
+        Directory.CreateDirectory(dir2);
+        Directory.CreateDirectory(dir3);
+
+        var img1 = Path.Combine(dir1, "img1.jpg");
+        var img2 = Path.Combine(dir2, "img2.jpg");
+        var img3 = Path.Combine(dir3, "img3.jpg");
+
+        CreateDummyImage(img1, 800, 600);
+        CreateDummyImage(img2, 800, 600);
+        CreateDummyImage(img3, 800, 600);
+
+        // 1. 初回: 全3つのフォルダを登録してスキャン
+        await indexer.RunIndexAsync(new[] { dir1, dir2, dir3 });
+
+        using (var connection = dbManager.CreateConnection())
+        {
+            await connection.OpenAsync();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT COUNT(*) FROM Images;";
+            var count = (long)(await command.ExecuteScalarAsync() ?? 0L);
+            Assert.Equal(3L, count);
+        }
+
+        // 2. 2回目: dir3 を除外して dir1 と dir2 のみで再スキャン
+        await indexer.RunIndexAsync(new[] { dir1, dir2 });
+
+        using (var connection = dbManager.CreateConnection())
+        {
+            await connection.OpenAsync();
+            using var command = connection.CreateCommand();
+            
+            // 全体で 2 件になっていることをアサーション
+            command.CommandText = "SELECT COUNT(*) FROM Images;";
+            var count = (long)(await command.ExecuteScalarAsync() ?? 0L);
+            Assert.Equal(2L, count);
+
+            // img3 だけが消去されていることを個別にアサーション
+            command.CommandText = "SELECT COUNT(*) FROM Images WHERE Path = @Path;";
+            command.Parameters.AddWithValue("@Path", img3);
+            var countImg3 = (long)(await command.ExecuteScalarAsync() ?? 0L);
+            Assert.Equal(0L, countImg3);
+
+            // img1 と img2 が残っていることをアサーション
+            command.CommandText = "SELECT COUNT(*) FROM Images WHERE Path = @Path;";
+            command.Parameters.Clear();
+            command.Parameters.AddWithValue("@Path", img1);
+            var countImg1 = (long)(await command.ExecuteScalarAsync() ?? 0L);
+            Assert.Equal(1L, countImg1);
+        }
     }
 }

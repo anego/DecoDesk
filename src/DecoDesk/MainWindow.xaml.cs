@@ -22,13 +22,13 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 「参照...」ボタンのクリックイベント処理。モダンなフォルダ選択ダイアログを表示します。
+    /// 「追加...」ボタンのクリックイベント処理。モダンなフォルダ選択ダイアログを表示してリストに追加します。
     /// </summary>
-    private void BrowseFolder_Click(object sender, RoutedEventArgs e)
+    private void AddFolder_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new Microsoft.Win32.OpenFolderDialog
         {
-            Title = "対象の画像フォルダを選択してください",
+            Title = "追加する画像フォルダを選択してください",
             Multiselect = false
         };
 
@@ -36,7 +36,11 @@ public partial class MainWindow : Window
         {
             if (DataContext is ViewModels.MainWindowViewModel viewModel)
             {
-                viewModel.TargetDirectory = dialog.FolderName;
+                var folder = dialog.FolderName;
+                if (!string.IsNullOrWhiteSpace(folder) && !viewModel.TargetDirectories.Contains(folder))
+                {
+                    viewModel.TargetDirectories.Add(folder);
+                }
             }
         }
     }

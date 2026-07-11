@@ -9,9 +9,30 @@ namespace DecoDesk.Configuration;
 public sealed class AppSettings
 {
     /// <summary>
-    /// スキャン対象の画像ディレクトリパスを取得または設定します。
+    /// 互換用：スキャン対象の画像ディレクトリパスを取得または設定します。
     /// </summary>
-    public string TargetDirectory { get; set; } = string.Empty;
+    [Obsolete("Use TargetDirectories instead.")]
+    [JsonIgnore]
+    public string TargetDirectory
+    {
+        get => TargetDirectories.Count > 0 ? TargetDirectories[0] : string.Empty;
+        set
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                TargetDirectories ??= new System.Collections.Generic.List<string>();
+                if (!TargetDirectories.Contains(value))
+                {
+                    TargetDirectories.Add(value);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// スキャン対象の画像ディレクトリパスのリストを取得または設定します。
+    /// </summary>
+    public System.Collections.Generic.List<string> TargetDirectories { get; set; } = new();
 
     /// <summary>
     /// 壁紙の自動更新間隔（秒単位）を取得または設定します。
@@ -67,7 +88,7 @@ public sealed class AppSettings
     {
         return new AppSettings
         {
-            TargetDirectory = string.Empty,
+            TargetDirectories = new System.Collections.Generic.List<string>(),
             UpdateIntervalSeconds = 900,
             ProcessingMode = "None",
             AutoUpdateEnabled = false,

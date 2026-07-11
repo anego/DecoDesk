@@ -88,6 +88,32 @@ public sealed class SettingsManager
                     }
                 }
 
+                // 互換性マイグレーション：json 内に TargetDirectory があり、TargetDirectories が無いか空の場合
+                if (json.Contains("TargetDirectory") && (settings.TargetDirectories == null || settings.TargetDirectories.Count == 0))
+                {
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(json);
+                        if (doc.RootElement.TryGetProperty("TargetDirectory", out var dirProp))
+                        {
+                            string dir = dirProp.GetString() ?? string.Empty;
+                            if (!string.IsNullOrWhiteSpace(dir))
+                            {
+                                settings.TargetDirectories ??= new System.Collections.Generic.List<string>();
+                                if (!settings.TargetDirectories.Contains(dir))
+                                {
+                                    settings.TargetDirectories.Add(dir);
+                                    Logger.LogInformation("旧設定形式からフォルダマイグレーションを実行しました: TargetDirectory={Path}", dir);
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogWarning(ex, "フォルダマイグレーション中にエラーが発生しました。");
+                    }
+                }
+
                 Logger.LogInformation("設定ファイルを読み込みました。ファイルパス={FilePath}, UpdateIntervalSeconds={IntervalSeconds}秒", _settingsFilePath, settings.UpdateIntervalSeconds);
                 return settings;
             }

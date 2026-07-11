@@ -32,21 +32,18 @@ public sealed class ImageBulkIndexer
     public record IndexProgress(int FoundCount, int IndexedCount);
 
     /// <summary>
-    /// 指定されたルートパス配下の画像をスキャンし、データベースのインデックスを構築・更新します。
+    /// 指定された複数のルートパス配下の画像をスキャンし、データベースのインデックスを構築・更新します。
     /// </summary>
-    /// <param name="rootPath">走査するルートディレクトリのパス</param>
+    /// <param name="rootPaths">走査するルートディレクトリのパスのリスト</param>
     /// <param name="progress">進捗を通知するプログレス通知インターフェース</param>
     /// <param name="cancellationToken">キャンセル要求を監視するためのトークン</param>
-    public async Task RunIndexAsync(string rootPath, IProgress<IndexProgress>? progress = null, CancellationToken cancellationToken = default)
+    public async Task RunIndexAsync(System.Collections.Generic.IEnumerable<string> rootPaths, IProgress<IndexProgress>? progress = null, CancellationToken cancellationToken = default)
     {
         // データベースの初期化を確認
         await _dbManager.InitializeAsync();
 
-        // 走査対象外（変更前の古いフォルダ等）の不要なレコードをDBからクリーンアップ
-        await DeleteOrphanedRecordsAsync(rootPath);
-
-        // 1. ファイルを列挙する
-        var imageFiles = FileEnumerator.EnumerateImageFiles(rootPath);
+        // 走査対象外（リストから除外されたフォルダ等）の不要なレコードをDBからクリーンアップ
+        await DeleteOrphanedRecordsAsync(rootPaths);
 
         using var connection = _dbManager.CreateConnection();
         await connection.OpenAsync(cancellationToken);
@@ -75,49 +72,60 @@ public sealed class ImageBulkIndexer
             transaction = connection.BeginTransaction();
             insertCommand.Transaction = transaction;
 
-            foreach (var filePath in imageFiles)
+            foreach (var rootPath in rootPaths)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                foundCount++;
-
-                // バイナリヘッダから幅と高さを高速抽出
-                var size = ImageHeaderParser.GetImageSize(filePath);
-                if (size == null)
-                {
-                    // 画像のメタデータが正常に取得できなかった場合はスキップ
-                    continue;
-                }
-
-                var (width, height) = size.Value;
-                if (width <= 0 || height <= 0)
+                if (string.IsNullOrWhiteSpace(rootPath) || !Directory.Exists(rootPath))
                 {
                     continue;
                 }
 
-                double aspectRatio = (double)width / height;
+                // 1. ファイルを列挙する
+                var imageFiles = FileEnumerator.EnumerateImageFiles(rootPath);
 
-                // パラメータのバインド
-                paramPath.Value = filePath;
-                paramWidth.Value = width;
-                paramHeight.Value = height;
-                paramAspectRatio.Value = aspectRatio;
-                // 初回登録時の LastUsed は 0（未適用状態）とする
-                paramLastUsed.Value = 0;
-
-                await insertCommand.ExecuteNonQueryAsync(cancellationToken);
-                indexedCount++;
-
-                // 一定バッチサイズごとにコミットして新しいトランザクションを開始
-                if (indexedCount % BatchSize == 0)
+                foreach (var filePath in imageFiles)
                 {
-                    await transaction.CommitAsync(cancellationToken);
-                    transaction.Dispose();
+                    cancellationToken.ThrowIfCancellationRequested();
+                    foundCount++;
 
-                    // 進捗通知
-                    progress?.Report(new IndexProgress(foundCount, indexedCount));
+                    // バイナリヘッダから幅と高さを高速抽出
+                    var size = ImageHeaderParser.GetImageSize(filePath);
+                    if (size == null)
+                    {
+                        // 画像のメタデータが正常に取得できなかった場合はスキップ
+                        continue;
+                    }
 
-                    transaction = connection.BeginTransaction();
-                    insertCommand.Transaction = transaction;
+                    var (width, height) = size.Value;
+                    if (width <= 0 || height <= 0)
+                    {
+                        continue;
+                    }
+
+                    double aspectRatio = (double)width / height;
+
+                    // パラメータのバインド
+                    paramPath.Value = filePath;
+                    paramWidth.Value = width;
+                    paramHeight.Value = height;
+                    paramAspectRatio.Value = aspectRatio;
+                    // 初回登録時の LastUsed は 0（未適用状態）とする
+                    paramLastUsed.Value = 0;
+
+                    await insertCommand.ExecuteNonQueryAsync(cancellationToken);
+                    indexedCount++;
+
+                    // 一定バッチサイズごとにコミットして新しいトランザクションを開始
+                    if (indexedCount % BatchSize == 0)
+                    {
+                        await transaction.CommitAsync(cancellationToken);
+                        transaction.Dispose();
+
+                        // 進捗通知
+                        progress?.Report(new IndexProgress(foundCount, indexedCount));
+
+                        transaction = connection.BeginTransaction();
+                        insertCommand.Transaction = transaction;
+                    }
                 }
             }
 
@@ -152,27 +160,44 @@ public sealed class ImageBulkIndexer
     }
 
     /// <summary>
-    /// 指定されたルートパス配下に属さない古い画像レコードをデータベースから削除します。
+    /// 指定されたすべての登録ディレクトリ配下に属さない古い画像レコードをデータベースから削除します。
     /// </summary>
-    private async Task DeleteOrphanedRecordsAsync(string rootPath)
+    private async Task DeleteOrphanedRecordsAsync(System.Collections.Generic.IEnumerable<string> rootPaths)
     {
-        string normRoot = rootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        string pattern1 = normRoot + Path.DirectorySeparatorChar + "%";
-        string pattern2 = normRoot + Path.AltDirectorySeparatorChar + "%";
-
         using var connection = _dbManager.CreateConnection();
         await connection.OpenAsync();
         using var command = connection.CreateCommand();
-        command.CommandText = @"
-            DELETE FROM Images 
-            WHERE Path <> @Root 
-              AND Path NOT LIKE @Pattern1 
-              AND Path NOT LIKE @Pattern2;
-        ";
-        command.Parameters.AddWithValue("@Root", normRoot);
-        command.Parameters.AddWithValue("@Pattern1", pattern1);
-        command.Parameters.AddWithValue("@Pattern2", pattern2);
 
+        var sql = new System.Text.StringBuilder();
+        sql.Append("DELETE FROM Images");
+
+        var conditions = new System.Collections.Generic.List<string>();
+        int idx = 0;
+
+        foreach (var rootPath in rootPaths)
+        {
+            if (string.IsNullOrWhiteSpace(rootPath)) continue;
+
+            string normRoot = rootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string pRoot = $"@Root{idx}";
+            string pPat1 = $"@Pat1_{idx}";
+            string pPat2 = $"@Pat2_{idx}";
+
+            conditions.Add($"(Path <> {pRoot} AND Path NOT LIKE {pPat1} AND Path NOT LIKE {pPat2})");
+
+            command.Parameters.AddWithValue(pRoot, normRoot);
+            command.Parameters.AddWithValue(pPat1, normRoot + Path.DirectorySeparatorChar + "%");
+            command.Parameters.AddWithValue(pPat2, normRoot + Path.AltDirectorySeparatorChar + "%");
+            idx++;
+        }
+
+        if (conditions.Count > 0)
+        {
+            sql.Append(" WHERE ");
+            sql.Append(string.Join(" AND ", conditions));
+        }
+
+        command.CommandText = sql.ToString();
         await command.ExecuteNonQueryAsync();
     }
 }

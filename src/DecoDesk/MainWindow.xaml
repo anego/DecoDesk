@@ -8,7 +8,8 @@
         mc:Ignorable="d"
         Title="DecoDesk - 設定" Height="615" Width="550"
         Background="#1E1E1E" Foreground="#E0E0E0"
-        WindowStartupLocation="CenterScreen" ResizeMode="NoResize">
+        WindowStartupLocation="CenterScreen" ResizeMode="NoResize"
+        Icon="icon.ico">
     
     <Window.DataContext>
         <vm:MainWindowViewModel />
@@ -121,15 +122,24 @@
 
         <!-- メインコンテンツ -->
         <StackPanel Grid.Row="1">
-            <!-- フォルダ選択 -->
-            <Label Content="スキャン対象画像フォルダ" Target="{Binding ElementName=TxtDir}" />
+            <!-- 複数フォルダ選択 -->
+            <Label Content="スキャン対象画像フォルダ (複数登録可能)" />
             <Grid Margin="0,0,0,16">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <TextBox x:Name="TxtDir" Grid.Column="0" Text="{Binding TargetDirectory, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding IsNotIndexing}" />
-                <Button Grid.Column="1" Content="参照..." Margin="8,0,0,0" Click="BrowseFolder_Click" IsEnabled="{Binding IsNotIndexing}" />
+                <ListBox Grid.Column="0" Height="90" ItemsSource="{Binding TargetDirectories}" SelectedItem="{Binding SelectedDirectory}" Background="#252526" Foreground="#FFFFFF" BorderBrush="#3F3F46" BorderThickness="1" IsEnabled="{Binding IsNotIndexing}">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding}" Padding="4,2" FontSize="11" TextTrimming="CharacterEllipsis" />
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+                <StackPanel Grid.Column="1" VerticalAlignment="Stretch" Margin="8,0,0,0">
+                    <Button Content="追加..." Click="AddFolder_Click" IsEnabled="{Binding IsNotIndexing}" Height="28" Width="80" Margin="0,0,0,6" />
+                    <Button Content="削除" Command="{Binding RemoveDirectoryCommand}" IsEnabled="{Binding IsNotIndexing}" Height="28" Width="80" />
+                </StackPanel>
             </Grid>
 
             <!-- 2カラム設定 -->
@@ -222,8 +232,8 @@
                     </Grid.ColumnDefinitions>
                     <TextBlock Text="画像データベースの同期状況" FontWeight="SemiBold" Foreground="#FFFFFF" VerticalAlignment="Center" />
                     <StackPanel Grid.Column="1" Orientation="Horizontal">
-                        <Button Content="インデックス更新" Command="{Binding StartIndexingCommand}" Padding="10,4" FontSize="11" Margin="0,0,8,0" />
-                        <Button Content="キャンセル" Command="{Binding CancelIndexingCommand}" Padding="10,4" FontSize="11" />
+                        <Button Content="インデックス更新" Command="{Binding StartIndexingCommand}" IsEnabled="{Binding IsNotIndexing}" Padding="10,4" FontSize="11" Margin="0,0,8,0" />
+                        <Button Content="キャンセル" Command="{Binding CancelIndexingCommand}" IsEnabled="{Binding IsIndexing}" Padding="10,4" FontSize="11" />
                     </StackPanel>
                 </Grid>
                 
@@ -234,7 +244,7 @@
 
         <!-- 下部保存・閉じるボタン -->
         <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
-            <Button Content="保存して適用" Command="{Binding SaveCommand}" Style="{StaticResource AccentButton}" Width="120" Height="32" Margin="0,0,8,0" />
+            <Button Content="保存して適用" Command="{Binding SaveCommand}" IsEnabled="{Binding IsNotIndexing}" Style="{StaticResource AccentButton}" Width="120" Height="32" Margin="0,0,8,0" />
             <Button Content="閉じる" Click="Close_Click" Width="80" Height="32" />
         </StackPanel>
     </Grid>

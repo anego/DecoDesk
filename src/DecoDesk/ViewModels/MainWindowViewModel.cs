@@ -20,7 +20,8 @@ public sealed class MainWindowViewModel : ViewModelBase
     private readonly DatabaseManager _dbManager;
     private readonly ImageBulkIndexer _indexer;
 
-    private string _targetDirectory = string.Empty;
+    private System.Collections.ObjectModel.ObservableCollection<string> _targetDirectories = new();
+    private string? _selectedDirectory;
     private int _updateIntervalSeconds = 900;
     private string _processingMode = "None";
     private bool _autoUpdateEnabled;
@@ -35,20 +36,33 @@ public sealed class MainWindowViewModel : ViewModelBase
     private CancellationTokenSource? _indexingCts;
 
     /// <summary>
-    /// 設定項目「対象ディレクトリ」のバインド用プロパティ
+    /// 設定項目「対象ディレクトリ（複数）」のバインド用プロパティ
     /// </summary>
-    public string TargetDirectory
+    public System.Collections.ObjectModel.ObservableCollection<string> TargetDirectories
     {
-        get => _targetDirectory;
+        get => _targetDirectories;
+        set => SetProperty(ref _targetDirectories, value);
+    }
+
+    /// <summary>
+    /// リストから選択されているディレクトリパス
+    /// </summary>
+    public string? SelectedDirectory
+    {
+        get => _selectedDirectory;
         set
         {
-            if (SetProperty(ref _targetDirectory, value))
+            if (SetProperty(ref _selectedDirectory, value))
             {
-                // ディレクトリが空でなくなったらインデックスボタンを活性化させるため再評価
                 CommandManager.InvalidateRequerySuggested();
             }
         }
     }
+
+    /// <summary>
+    /// 互換用・コマンド判定用：設定項目「対象ディレクトリ（単一）」のプロパティ
+    /// </summary>
+    public string TargetDirectory => TargetDirectories.Count > 0 ? TargetDirectories[0] : string.Empty;
 
     /// <summary>
     /// 設定項目「更新間隔（秒）」のバインド用プロパティ
@@ -207,12 +221,12 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// <summary>
     /// ポストカード風モードが選択されているかどうかを示すプロパティ
     /// </summary>
-    public bool IsPostcardModeSelected => ProcessingMode == "Postcard";
+    public bool IsPostcardModeSelected => IsNotIndexing && ProcessingMode == "Postcard";
 
     /// <summary>
     /// ポストカード/コルクボードなどの高度な加工モードが選択されているかどうかを示すプロパティ
     /// </summary>
-    public bool IsProcessingModeAdvanced => ProcessingMode == "Postcard" || ProcessingMode == "Corkboard";
+    public bool IsProcessingModeAdvanced => IsNotIndexing && (ProcessingMode == "Postcard" || ProcessingMode == "Corkboard");
 
     /// <summary>
     /// インデックス作成を実行中かどうかを示すバインド用プロパティ
@@ -225,6 +239,8 @@ public sealed class MainWindowViewModel : ViewModelBase
             if (SetProperty(ref _isIndexing, value))
             {
                 OnPropertyChanged(nameof(IsNotIndexing));
+                OnPropertyChanged(nameof(IsProcessingModeAdvanced));
+                OnPropertyChanged(nameof(IsPostcardModeSelected));
                 // コマンドの実行可能状態を再評価
                 CommandManager.InvalidateRequerySuggested();
             }
@@ -246,7 +262,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// 進捗状態を文字で表示するプロパティ（例: "3020ファイル登録完了"）
+    /// 進捗状態を文字で表示するプロパティ（例: "3,020ファイル登録完了"）
     /// </summary>
     public string ProgressText
     {
@@ -268,6 +284,11 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// 実行中のインデックススキャンをキャンセルするコマンドを取得します。
     /// </summary>
     public ICommand CancelIndexingCommand { get; }
+
+    /// <summary>
+    /// 登録ディレクトリをリストから削除するコマンドを取得します。
+    /// </summary>
+    public ICommand RemoveDirectoryCommand { get; }
 
     /// <summary>
     /// ビューのクローズを要求するイベントです。
@@ -294,8 +315,9 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         SaveCommand = new RelayCommand(SaveSettings, () => !IsIndexing);
         SelectColorCommand = new RelayCommand(SelectColor);
-        StartIndexingCommand = new RelayCommand(async () => await StartIndexingAsync(), () => !IsIndexing && !string.IsNullOrWhiteSpace(TargetDirectory));
+        StartIndexingCommand = new RelayCommand(async () => await StartIndexingAsync(), () => !IsIndexing && TargetDirectories.Count > 0);
         CancelIndexingCommand = new RelayCommand(CancelIndexing, () => IsIndexing);
+        RemoveDirectoryCommand = new RelayCommand(RemoveDirectory, () => !IsIndexing && SelectedDirectory != null);
 
         // 保存された設定のロード
         LoadSettings();
@@ -308,7 +330,13 @@ public sealed class MainWindowViewModel : ViewModelBase
     {
         Logger.LogInformation("設定ファイルからのロードを開始します。");
         var settings = _settingsManager.Load();
-        TargetDirectory = settings.TargetDirectory;
+        
+        TargetDirectories.Clear();
+        foreach (var dir in settings.TargetDirectories)
+        {
+            TargetDirectories.Add(dir);
+        }
+
         UpdateIntervalSeconds = settings.UpdateIntervalSeconds;
         ProcessingMode = settings.ProcessingMode;
         AutoUpdateEnabled = settings.AutoUpdateEnabled;
@@ -317,8 +345,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         WallpaperDensity = settings.WallpaperDensity;
         WallpaperBackgroundColor = settings.WallpaperBackgroundColor;
         
-        Logger.LogInformation("設定ファイルのロードが完了しました: TargetDirectory={TargetDirectory}, UpdateIntervalSeconds={UpdateIntervalSeconds}秒, AutoUpdateEnabled={AutoUpdateEnabled}", 
-            TargetDirectory, UpdateIntervalSeconds, AutoUpdateEnabled);
+        Logger.LogInformation("設定ファイルのロードが完了しました: TargetDirectoriesCount={DirectoriesCount}, UpdateIntervalSeconds={UpdateIntervalSeconds}秒, AutoUpdateEnabled={AutoUpdateEnabled}", 
+            TargetDirectories.Count, UpdateIntervalSeconds, AutoUpdateEnabled);
 
         ProgressValue = 0;
         ProgressText = "設定を読み込みました。";
@@ -356,7 +384,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         {
             var settings = new AppSettings
             {
-                TargetDirectory = TargetDirectory,
+                TargetDirectories = new System.Collections.Generic.List<string>(TargetDirectories),
                 UpdateIntervalSeconds = UpdateIntervalSeconds,
                 ProcessingMode = ProcessingMode,
                 AutoUpdateEnabled = AutoUpdateEnabled,
@@ -365,8 +393,8 @@ public sealed class MainWindowViewModel : ViewModelBase
                 WallpaperDensity = WallpaperDensity,
                 WallpaperBackgroundColor = WallpaperBackgroundColor
             };
-            Logger.LogInformation("保存対象の設定データ: TargetDirectory={TargetDirectory}, UpdateIntervalSeconds={UpdateIntervalSeconds}秒, AutoUpdateEnabled={AutoUpdateEnabled}", 
-                settings.TargetDirectory, settings.UpdateIntervalSeconds, settings.AutoUpdateEnabled);
+            Logger.LogInformation("保存対象の設定データ: TargetDirectoriesCount={DirectoriesCount}, UpdateIntervalSeconds={UpdateIntervalSeconds}秒, AutoUpdateEnabled={AutoUpdateEnabled}", 
+                settings.TargetDirectories.Count, settings.UpdateIntervalSeconds, settings.AutoUpdateEnabled);
 
             _settingsManager.Save(settings);
             Logger.LogInformation("設定ファイルのディスク保存に成功しました。");
@@ -391,7 +419,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// </summary>
     private async Task StartIndexingAsync()
     {
-        if (string.IsNullOrWhiteSpace(TargetDirectory)) return;
+        if (TargetDirectories.Count == 0) return;
 
         IsIndexing = true;
         ProgressValue = 0;
@@ -400,7 +428,7 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         var progress = new Progress<ImageBulkIndexer.IndexProgress>(p =>
         {
-            ProgressText = $"{p.FoundCount}ファイル検出、{p.IndexedCount}ファイルをデータベースに登録完了";
+            ProgressText = $"{p.FoundCount:N0}ファイル検出、{p.IndexedCount:N0}ファイルをデータベースに登録完了";
             // スキャンの進捗率は総ファイル数が判明するまでは推測値となるため、
             // 登録数に合わせてUIの進捗表記を更新（1ファイルあたり一定のプログレス値でインジケータを駆動）
             ProgressValue = p.IndexedCount % 100; // シンプルなループアニメーション効果
@@ -410,7 +438,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         {
             await Task.Run(async () =>
             {
-                await _indexer.RunIndexAsync(TargetDirectory, progress, _indexingCts.Token);
+                await _indexer.RunIndexAsync(TargetDirectories, progress, _indexingCts.Token);
             });
             ProgressText = "インデックスの同期が正常に完了しました。";
             ProgressValue = 100;
@@ -442,5 +470,17 @@ public sealed class MainWindowViewModel : ViewModelBase
     private void CancelIndexing()
     {
         _indexingCts?.Cancel();
+    }
+
+    /// <summary>
+    /// リストから選択されているディレクトリパスを削除します。
+    /// </summary>
+    private void RemoveDirectory()
+    {
+        if (SelectedDirectory != null)
+        {
+            TargetDirectories.Remove(SelectedDirectory);
+            CommandManager.InvalidateRequerySuggested();
+        }
     }
 }
