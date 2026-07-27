@@ -6,7 +6,7 @@
         xmlns:sys="clr-namespace:System;assembly=System.Runtime"
         xmlns:vm="clr-namespace:DecoDesk.ViewModels"
         mc:Ignorable="d"
-        Title="DecoDesk - 設定" Height="615" Width="550"
+        Title="DecoDesk - 設定" Height="680" Width="550"
         Background="#1E1E1E" Foreground="#E0E0E0"
         WindowStartupLocation="CenterScreen" ResizeMode="NoResize"
         Icon="icon.ico">
@@ -121,7 +121,8 @@
         </StackPanel>
 
         <!-- メインコンテンツ -->
-        <StackPanel Grid.Row="1">
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,0,0,16">
+            <StackPanel Margin="0,0,12,0">
             <!-- 複数フォルダ選択 -->
             <Label Content="スキャン対象画像フォルダ (複数登録可能)" />
             <Grid Margin="0,0,0,16">
@@ -220,7 +221,32 @@
                     <Border Grid.Column="2" Width="40" Height="30" Margin="8,0,0,0" CornerRadius="4" BorderBrush="#3F3F46" BorderThickness="1" Background="{Binding BackgroundColorBrush}" />
                 </Grid>
             </StackPanel>
-        </StackPanel>
+
+            <!-- 起動時の設定（スタートアップ、起動時更新、ディレイ） -->
+            <Grid Margin="0,0,0,16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <!-- 左カラム: 起動オプション -->
+                <StackPanel Grid.Column="0" Margin="0,0,10,0" VerticalAlignment="Center">
+                    <Label Content="システム起動設定" />
+                    <CheckBox Content="Windows 起動時に自動で実行する" IsChecked="{Binding StartWithWindows}" IsEnabled="{Binding IsNotIndexing}" Foreground="#E0E0E0" Margin="0,6,0,6" />
+                    <CheckBox Content="アプリ起動時に壁紙を自動更新する" IsChecked="{Binding UpdateWallpaperOnStartup}" IsEnabled="{Binding IsNotIndexing}" Foreground="#E0E0E0" Margin="0,4,0,0" />
+                </StackPanel>
+
+                <!-- 右カラム: 起動遅延秒数 -->
+                <StackPanel Grid.Column="1" Margin="10,0,0,0">
+                    <StackPanel Orientation="Horizontal">
+                        <Label Content="起動後適用ディレイ:" Padding="0,2,4,2" />
+                        <TextBlock Text="{Binding StartupDelaySeconds, StringFormat={}{0} 秒}" Foreground="#007ACC" FontWeight="Bold" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <Slider Minimum="0" Maximum="300" Value="{Binding StartupDelaySeconds}" TickFrequency="5" IsSnapToTickEnabled="True" IsEnabled="{Binding IsStartupDelaySliderEnabled}" Height="30" Margin="0,4,0,0" VerticalAlignment="Center" />
+                </StackPanel>
+            </Grid>
+            </StackPanel>
+        </ScrollViewer>
 
         <!-- インデックス同期エリア -->
         <Border Grid.Row="2" Background="#252526" BorderBrush="#333333" BorderThickness="1" CornerRadius="6" Padding="15,12" Margin="0,0,0,20">

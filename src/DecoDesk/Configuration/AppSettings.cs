@@ -1,6 +1,3 @@
-using System;
-using System.Text.Json.Serialization;
-
 namespace DecoDesk.Configuration;
 
 /// <summary>
@@ -8,27 +5,6 @@ namespace DecoDesk.Configuration;
 /// </summary>
 public sealed class AppSettings
 {
-    /// <summary>
-    /// 互換用：スキャン対象の画像ディレクトリパスを取得または設定します。
-    /// </summary>
-    [Obsolete("Use TargetDirectories instead.")]
-    [JsonIgnore]
-    public string TargetDirectory
-    {
-        get => TargetDirectories.Count > 0 ? TargetDirectories[0] : string.Empty;
-        set
-        {
-            if (!string.IsNullOrWhiteSpace(value))
-            {
-                TargetDirectories ??= new System.Collections.Generic.List<string>();
-                if (!TargetDirectories.Contains(value))
-                {
-                    TargetDirectories.Add(value);
-                }
-            }
-        }
-    }
-
     /// <summary>
     /// スキャン対象の画像ディレクトリパスのリストを取得または設定します。
     /// </summary>
@@ -38,17 +14,6 @@ public sealed class AppSettings
     /// 壁紙の自動更新間隔（秒単位）を取得または設定します。
     /// </summary>
     public int UpdateIntervalSeconds { get; set; } = 900;
-
-    /// <summary>
-    /// 互換性用：壁紙の自動更新間隔（分単位）を取得または設定します。
-    /// </summary>
-    [Obsolete("Use UpdateIntervalSeconds instead")]
-    [JsonIgnore]
-    public int UpdateIntervalMinutes
-    {
-        get => UpdateIntervalSeconds / 60;
-        set => UpdateIntervalSeconds = value * 60;
-    }
 
     /// <summary>
     /// 画像加工モードを取得または設定します（例: "None", "Postcard", "Corkboard"）。
@@ -81,6 +46,21 @@ public sealed class AppSettings
     public string WallpaperBackgroundColor { get; set; } = "#2F4F4F";
 
     /// <summary>
+    /// Windows 起動時に自動で実行するかどうかを取得または設定します。
+    /// </summary>
+    public bool StartWithWindows { get; set; } = false;
+
+    /// <summary>
+    /// アプリケーション起動時に壁紙を自動更新するかどうかを取得または設定します。
+    /// </summary>
+    public bool UpdateWallpaperOnStartup { get; set; } = false;
+
+    /// <summary>
+    /// アプリケーション起動時の壁紙自動更新の遅延秒数を取得または設定します。
+    /// </summary>
+    public int StartupDelaySeconds { get; set; } = 60;
+
+    /// <summary>
     /// デフォルト値を持つ新しい設定インスタンスを作成します。
     /// </summary>
     /// <returns>デフォルト設定オブジェクト</returns>
@@ -95,7 +75,10 @@ public sealed class AppSettings
             WallpaperImageCount = 6,
             WallpaperImageSize = 350,
             WallpaperDensity = 1.0,
-            WallpaperBackgroundColor = "#2F4F4F"
+            WallpaperBackgroundColor = "#2F4F4F",
+            StartWithWindows = false,
+            UpdateWallpaperOnStartup = false,
+            StartupDelaySeconds = 60
         };
     }
 }

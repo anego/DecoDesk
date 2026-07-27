@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="dGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#4DB8FF" />
+      <stop offset="100%" stop-color="#4CC966" />
+    </linearGradient>
+    <clipPath id="holeClip">
+      <path d="M 210 180 A 20 20 0 0 0 190 200 L 190 312 A 20 20 0 0 0 210 332 L 260 332 A 76 76 0 0 0 336 256 A 76 76 0 0 0 260 180 Z" />
+    </clipPath>
+  </defs>
+
+  <!-- Background Card -->
+  <rect x="32" y="32" width="448" height="448" rx="72" fill="#ffffff" stroke="#525252" stroke-width="24" />
+
+  <!-- Landscape Background -->
+  <g clip-path="url(#holeClip)">
+    <rect x="180" y="170" width="180" height="180" fill="#7DD3FF" />
+    <ellipse cx="290" cy="300" rx="70" ry="40" fill="#8BE35D" />
+    <ellipse cx="210" cy="320" rx="80" ry="50" fill="#5AB334" />
+    <!-- Tree Trunk -->
+    <rect x="274" y="270" width="8" height="24" fill="#5C4033" />
+    <!-- Tree Leaves -->
+    <polygon points="278,220 263,250 293,250" fill="#208C30" />
+    <polygon points="278,240 258,275 298,275" fill="#1B7327" />
+  </g>
+
+  <!-- The 'D' Shape -->
+  <path d="
+    M 140 120
+    L 260 120
+    A 136 136 0 0 1 396 256
+    A 136 136 0 0 1 260 392
+    L 140 392
+    A 20 20 0 0 1 120 372
+    L 120 140
+    A 20 20 0 0 1 140 120
+    Z
+    M 210 180
+    A 20 20 0 0 0 190 200
+    L 190 312
+    A 20 20 0 0 0 210 332
+    L 260 332
+    A 76 76 0 0 0 336 256
+    A 76 76 0 0 0 260 180
+    Z
+  " fill="url(#dGrad)" fill-rule="evenodd" />
+
+  <!-- White border for the 'D' inner hole -->
+  <path d="M 210 180 A 20 20 0 0 0 190 200 L 190 312 A 20 20 0 0 0 210 332 L 260 332 A 76 76 0 0 0 336 256 A 76 76 0 0 0 260 180 Z" fill="none" stroke="#ffffff" stroke-width="12" />
+
+  <!-- Refresh Icon -->
+  <circle cx="396" cy="116" r="52" fill="#525252" />
+  <g transform="translate(360, 80) scale(3)">
+    <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" fill="#ffffff"/>
+  </g>
+</svg>

@@ -29,6 +29,9 @@ public sealed class MainWindowViewModel : ViewModelBase
     private int _wallpaperImageSize = 350;
     private double _wallpaperDensity = 1.0;
     private string _wallpaperBackgroundColor = "#2F4F4F";
+    private bool _startWithWindows;
+    private bool _updateWallpaperOnStartup;
+    private int _startupDelaySeconds = 60;
 
     private bool _isIndexing;
     private double _progressValue;
@@ -132,6 +135,39 @@ public sealed class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>
+    /// 設定項目「Windows自動起動」のバインド用プロパティ
+    /// </summary>
+    public bool StartWithWindows
+    {
+        get => _startWithWindows;
+        set => SetProperty(ref _startWithWindows, value);
+    }
+
+    /// <summary>
+    /// 設定項目「起動時壁紙更新」のバインド用プロパティ
+    /// </summary>
+    public bool UpdateWallpaperOnStartup
+    {
+        get => _updateWallpaperOnStartup;
+        set
+        {
+            if (SetProperty(ref _updateWallpaperOnStartup, value))
+            {
+                OnPropertyChanged(nameof(IsStartupDelaySliderEnabled));
+            }
+        }
+    }
+
+    /// <summary>
+    /// 設定項目「起動時壁紙更新のディレイ時間（秒）」のバインド用プロパティ
+    /// </summary>
+    public int StartupDelaySeconds
+    {
+        get => _startupDelaySeconds;
+        set => SetProperty(ref _startupDelaySeconds, value);
+    }
+
+    /// <summary>
     /// 合成に使用する画像数のバインド用プロパティ
     /// </summary>
     public int WallpaperImageCount
@@ -229,6 +265,11 @@ public sealed class MainWindowViewModel : ViewModelBase
     public bool IsProcessingModeAdvanced => IsNotIndexing && (ProcessingMode == "Postcard" || ProcessingMode == "Corkboard");
 
     /// <summary>
+    /// 起動時適用ディレイスライダーが有効かどうかを示すプロパティ
+    /// </summary>
+    public bool IsStartupDelaySliderEnabled => IsNotIndexing && UpdateWallpaperOnStartup;
+
+    /// <summary>
     /// インデックス作成を実行中かどうかを示すバインド用プロパティ
     /// </summary>
     public bool IsIndexing
@@ -241,6 +282,7 @@ public sealed class MainWindowViewModel : ViewModelBase
                 OnPropertyChanged(nameof(IsNotIndexing));
                 OnPropertyChanged(nameof(IsProcessingModeAdvanced));
                 OnPropertyChanged(nameof(IsPostcardModeSelected));
+                OnPropertyChanged(nameof(IsStartupDelaySliderEnabled));
                 // コマンドの実行可能状態を再評価
                 CommandManager.InvalidateRequerySuggested();
             }
@@ -344,9 +386,16 @@ public sealed class MainWindowViewModel : ViewModelBase
         WallpaperImageSize = settings.WallpaperImageSize;
         WallpaperDensity = settings.WallpaperDensity;
         WallpaperBackgroundColor = settings.WallpaperBackgroundColor;
+
+        // レジストリ状態と設定ファイル状態の同期
+        settings.StartWithWindows = OS.StartupManager.IsStartupEnabled();
+        StartWithWindows = settings.StartWithWindows;
+
+        UpdateWallpaperOnStartup = settings.UpdateWallpaperOnStartup;
+        StartupDelaySeconds = settings.StartupDelaySeconds;
         
-        Logger.LogInformation("設定ファイルのロードが完了しました: TargetDirectoriesCount={DirectoriesCount}, UpdateIntervalSeconds={UpdateIntervalSeconds}秒, AutoUpdateEnabled={AutoUpdateEnabled}", 
-            TargetDirectories.Count, UpdateIntervalSeconds, AutoUpdateEnabled);
+        Logger.LogInformation("設定ファイルのロードが完了しました: TargetDirectoriesCount={DirectoriesCount}, UpdateIntervalSeconds={UpdateIntervalSeconds}秒, AutoUpdateEnabled={AutoUpdateEnabled}, StartWithWindows={StartWithWindows}", 
+            TargetDirectories.Count, UpdateIntervalSeconds, AutoUpdateEnabled, StartWithWindows);
 
         ProgressValue = 0;
         ProgressText = "設定を読み込みました。";
@@ -391,13 +440,19 @@ public sealed class MainWindowViewModel : ViewModelBase
                 WallpaperImageCount = WallpaperImageCount,
                 WallpaperImageSize = WallpaperImageSize,
                 WallpaperDensity = WallpaperDensity,
-                WallpaperBackgroundColor = WallpaperBackgroundColor
+                WallpaperBackgroundColor = WallpaperBackgroundColor,
+                StartWithWindows = StartWithWindows,
+                UpdateWallpaperOnStartup = UpdateWallpaperOnStartup,
+                StartupDelaySeconds = StartupDelaySeconds
             };
-            Logger.LogInformation("保存対象の設定データ: TargetDirectoriesCount={DirectoriesCount}, UpdateIntervalSeconds={UpdateIntervalSeconds}秒, AutoUpdateEnabled={AutoUpdateEnabled}", 
-                settings.TargetDirectories.Count, settings.UpdateIntervalSeconds, settings.AutoUpdateEnabled);
+            Logger.LogInformation("保存対象の設定データ: TargetDirectoriesCount={DirectoriesCount}, UpdateIntervalSeconds={UpdateIntervalSeconds}秒, AutoUpdateEnabled={AutoUpdateEnabled}, StartWithWindows={StartWithWindows}", 
+                settings.TargetDirectories.Count, settings.UpdateIntervalSeconds, settings.AutoUpdateEnabled, settings.StartWithWindows);
 
             _settingsManager.Save(settings);
             Logger.LogInformation("設定ファイルのディスク保存に成功しました。");
+
+            // レジストリへのスタートアップ登録/解除反映
+            OS.StartupManager.SetStartup(StartWithWindows);
 
             OS.WallpaperManager.Instance.RestartTimer();
 

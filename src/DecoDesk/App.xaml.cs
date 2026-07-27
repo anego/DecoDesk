@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Threading;
 using System.Windows;
 
@@ -13,12 +14,25 @@ public partial class App : System.Windows.Application
     private NotifyIconWrapper? _notifyIconWrapper;
 
     /// <summary>
-    /// アプリケーション起動時の初期化処理を行います。
+    /// One-shotモード（壁紙を1回変えてすぐ終了）を指定するコマンドライン引数です。
+    /// </summary>
+    private static readonly string[] OneShotArgs = { "--once", "/once" };
+
+    /// <summary>
+    /// アプリケーション起動時の初期化処理を行います。起動引数から One-shot モードと常駐モードを判別します。
     /// </summary>
     /// <param name="sender">イベントの発生元</param>
     /// <param name="e">イベント引数</param>
     private async void App_OnStartup(object sender, StartupEventArgs e)
     {
+        if (e.Args.Any(arg => OneShotArgs.Contains(arg, System.StringComparer.OrdinalIgnoreCase)))
+        {
+            // One-shotモード: タスクトレイ常駐や自動更新タイマーを起動せず、壁紙を1回だけ更新して終了する
+            await RunOneShotAsync();
+            Shutdown();
+            return;
+        }
+
         // 二重起動の検知と防止
         _mutex = new Mutex(true, MutexName, out bool createdNew);
         if (!createdNew)
@@ -43,6 +57,25 @@ public partial class App : System.Windows.Application
         catch (Exception ex)
         {
             System.Windows.MessageBox.Show($"壁紙エンジンの初期化に失敗しました:\n{ex.Message}", "DecoDesk", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    /// <summary>
+    /// One-shotモードの処理本体です。常駐用のタイマーやディレクトリ監視は起動せず、壁紙の1回更新のみを行います。
+    /// </summary>
+    private static async Task RunOneShotAsync()
+    {
+        try
+        {
+            await OS.WallpaperManager.Instance.RunOnceAsync();
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show($"壁紙のOne-shot更新に失敗しました:\n{ex.Message}", "DecoDesk", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally
+        {
+            OS.WallpaperManager.Instance.Dispose();
         }
     }
 

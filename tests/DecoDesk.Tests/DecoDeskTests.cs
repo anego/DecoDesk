@@ -217,7 +217,10 @@ public sealed class DecoDeskTests : IDisposable
             WallpaperImageCount = 8,
             WallpaperImageSize = 400,
             WallpaperDensity = 1.2,
-            WallpaperBackgroundColor = "#123456"
+            WallpaperBackgroundColor = "#123456",
+            StartWithWindows = true,
+            UpdateWallpaperOnStartup = true,
+            StartupDelaySeconds = 120
         };
         manager.Save(newSettings);
 
@@ -236,6 +239,9 @@ public sealed class DecoDeskTests : IDisposable
         Assert.Equal(400, loadedSettings.WallpaperImageSize);
         Assert.Equal(1.2, loadedSettings.WallpaperDensity);
         Assert.Equal("#123456", loadedSettings.WallpaperBackgroundColor);
+        Assert.True(loadedSettings.StartWithWindows);
+        Assert.True(loadedSettings.UpdateWallpaperOnStartup);
+        Assert.Equal(120, loadedSettings.StartupDelaySeconds);
     }
 
     [Fact]
@@ -253,5 +259,46 @@ public sealed class DecoDeskTests : IDisposable
         {
             Console.WriteLine($"MONITOR_DUMP_ERROR: {ex.Message}");
         }
+    }
+
+    [Fact]
+    public async Task GetLeastUsedImages_ShouldReturnUnusedAndOldestImagesFirst()
+    {
+        // 準備
+        var dbManager = new DatabaseManager(_dbPath);
+        await dbManager.InitializeAsync();
+
+        // テスト用テーブルをクリアして初期化
+        using (var connection = dbManager.CreateConnection())
+        {
+            await connection.OpenAsync();
+            using var command = connection.CreateCommand();
+            command.CommandText = "DELETE FROM Images;";
+            await command.ExecuteNonQueryAsync();
+
+            // テストデータを挿入
+            // 1. 未使用画像 (LastUsed = 0)
+            // 2. 過去に使われた古い画像 (LastUsed = 100)
+            // 3. 最近使われた新しい画像 (LastUsed = 200)
+            command.CommandText = @"
+                INSERT INTO Images (Path, Width, Height, AspectRatio, LastUsed) VALUES 
+                ('img_recent.jpg', 800, 600, 1.33, 200),
+                ('img_unused.jpg', 800, 600, 1.33, 0),
+                ('img_old.jpg', 800, 600, 1.33, 100);
+            ";
+            await command.ExecuteNonQueryAsync();
+        }
+
+        // 実行: 3枚取得を試みる
+        var result = await dbManager.GetLeastUsedImagesAsync(3, null, null);
+
+        // 検証
+        Assert.NotNull(result);
+        Assert.Equal(3, result.Count);
+        
+        // 順序の検証: 1番目は LastUsed = 0 (img_unused.jpg)、2番目は LastUsed = 100 (img_old.jpg)、3番目は LastUsed = 200 (img_recent.jpg)
+        Assert.Equal("img_unused.jpg", result[0].Path);
+        Assert.Equal("img_old.jpg", result[1].Path);
+        Assert.Equal("img_recent.jpg", result[2].Path);
     }
 }

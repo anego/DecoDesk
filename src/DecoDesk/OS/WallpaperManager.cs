@@ -32,6 +32,7 @@ public sealed class WallpaperManager : IDisposable
     private readonly object _timerLock = new();
 
     private System.Threading.Timer? _updateTimer;
+    private CancellationTokenSource? _startupDelayCts;
     private readonly List<DirectoryWatcher> _directoryWatchers = new();
     private List<MonitorAreaInfo> _monitors = new();
     private bool _isPreRenderedReady;
@@ -83,6 +84,18 @@ public sealed class WallpaperManager : IDisposable
     }
 
     /// <summary>
+    /// One-shotモード用の処理です。ディレクトリ監視や自動更新タイマーは起動せず、
+    /// データベース初期化と壁紙の事前レンダリング・即時適用のみを行います。
+    /// </summary>
+    public async Task RunOnceAsync()
+    {
+        await _dbManager.InitializeAsync();
+        RefreshMonitorInfo();
+        await PreRenderNextWallpaperAsync();
+        await TriggerUpdateNowAsync();
+    }
+
+    /// <summary>
     /// 壁紙マネージャーを初期化し、ディスプレイ構成のロード、自動同期監視の開始、および初期タイマーのセットアップを行います。
     /// </summary>
     public async Task InitializeAsync()
@@ -98,6 +111,44 @@ public sealed class WallpaperManager : IDisposable
 
         // 自動更新タイマーの起動
         RestartTimer();
+
+        // アプリ起動時の即時/遅延壁紙更新のスケジューリング
+        if (settings.UpdateWallpaperOnStartup)
+        {
+            if (settings.StartupDelaySeconds > 0)
+            {
+                _startupDelayCts = new CancellationTokenSource();
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        Logger.LogInformation("起動時更新のディレイ待機を開始します。秒数={Seconds}秒", settings.StartupDelaySeconds);
+                        await Task.Delay(TimeSpan.FromSeconds(settings.StartupDelaySeconds), _startupDelayCts.Token);
+                        Logger.LogInformation("起動時ディレイ待機が完了したため、壁紙を自動更新します。");
+                        
+                        await TriggerUpdateNowAsync();
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        Logger.LogInformation("起動時更新のディレイ待機がユーザーの割り込み等によってキャンセルされました。");
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogError(ex, "起動時更新のディレイ適用処理中に例外が発生しました。");
+                    }
+                    finally
+                    {
+                        _startupDelayCts?.Dispose();
+                        _startupDelayCts = null;
+                    }
+                });
+            }
+            else
+            {
+                // 遅延なし即時更新
+                _ = Task.Run(async () => await TriggerUpdateNowAsync());
+            }
+        }
     }
 
     /// <summary>
@@ -248,6 +299,9 @@ public sealed class WallpaperManager : IDisposable
     /// </summary>
     public async Task TriggerUpdateNowAsync()
     {
+        // ユーザーの手動更新割り込みまたは定期更新タイマー発火時に起動遅延待機をキャンセル
+        _startupDelayCts?.Cancel();
+
         if (_isUpdating) return;
         _isUpdating = true;
 
@@ -393,7 +447,7 @@ public sealed class WallpaperManager : IDisposable
             // 巨大スパン用キャンバスの、各モニターの配置位置に描画 (オフセット変換)
             float destX = monitor.Left - minLeft;
             float destY = monitor.Top - minTop;
-            spanCanvas.DrawBitmap(monitorBitmap, destX, destY, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None), null);
+            spanCanvas.DrawBitmap(monitorBitmap, destX, destY, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear), null);
         }
 
         // 次回適用予定のスロットに PNG として書き出し
@@ -412,17 +466,38 @@ public sealed class WallpaperManager : IDisposable
     private async Task<List<string>> GetRandomImagePathsAsync(int count, double? minRatio, double? maxRatio)
     {
         var paths = new List<string>();
-        // 連続して同じ画像が選ばれないように一時的にチェック
-        for (int i = 0; i < count; i++)
+
+        // 必要な枚数の3倍の候補（未使用・古い画像）を一括取得する
+        int candidateCount = count * 3;
+        var candidates = await _dbManager.GetLeastUsedImagesAsync(candidateCount, minRatio, maxRatio);
+
+        // 指定アスペクト比条件で画像が足りない場合、アスペクト比の制限をなくして全体から取得を試みる
+        if (candidates.Count < count)
         {
-            var record = await _dbManager.GetRandomImageAsync(minRatio, maxRatio, null);
-            if (record != null && !paths.Contains(record.Path))
+            candidates = await _dbManager.GetLeastUsedImagesAsync(candidateCount, null, null);
+        }
+
+        if (candidates.Count == 0)
+        {
+            return paths;
+        }
+
+        // 候補リストをランダムシャッフル
+        var random = new Random();
+        var shuffled = candidates.OrderBy(_ => random.Next()).ToList();
+
+        // 必要な件数だけ取り出し、使用履歴を更新する
+        foreach (var record in shuffled)
+        {
+            if (paths.Count >= count) break;
+
+            if (!paths.Contains(record.Path))
             {
                 paths.Add(record.Path);
-                // 選ばれた画像の使用履歴を更新
                 await UpdateImageLastUsedAsync(record.Path);
             }
         }
+
         return paths;
     }
 
@@ -458,6 +533,10 @@ public sealed class WallpaperManager : IDisposable
         {
             _updateTimer?.Dispose();
             _updateTimer = null;
+
+            _startupDelayCts?.Cancel();
+            _startupDelayCts?.Dispose();
+            _startupDelayCts = null;
 
             foreach (var watcher in _directoryWatchers)
             {

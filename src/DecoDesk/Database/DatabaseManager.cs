@@ -181,6 +181,52 @@ public sealed class DatabaseManager
         return null;
     }
 
+    /// <summary>
+    /// 条件に合致する画像レコード群を、使用日時が古い順（未使用の 0 を最優先）で指定された最大件数まで取得します。
+    /// </summary>
+    /// <param name="maxCount">最大取得件数</param>
+    /// <param name="minAspectRatio">最小アスペクト比（オプション）</param>
+    /// <param name="maxAspectRatio">最大アスペクト比（オプション）</param>
+    /// <returns>条件を満たす画像メタデータリスト</returns>
+    public async Task<System.Collections.Generic.List<ImageRecord>> GetLeastUsedImagesAsync(int maxCount, double? minAspectRatio, double? maxAspectRatio)
+    {
+        var list = new System.Collections.Generic.List<ImageRecord>();
+        using var connection = CreateConnection();
+        await connection.OpenAsync();
+
+        // アスペクト比条件の動的構築
+        var whereClause = "WHERE 1=1";
+        if (minAspectRatio.HasValue) whereClause += " AND AspectRatio >= @MinRatio";
+        if (maxAspectRatio.HasValue) whereClause += " AND AspectRatio <= @MaxRatio";
+
+        using var command = connection.CreateCommand();
+        // LastUsedが0（未使用）のものを最優先、次いで使用日時が古い順でソート（同着の場合はランダムにしてフォルダ偏りを防止）
+        command.CommandText = $@"
+            SELECT Path, Width, Height, AspectRatio, LastUsed, IsFavorite 
+            FROM Images 
+            {whereClause} 
+            ORDER BY LastUsed ASC, RANDOM()
+            LIMIT @MaxCount";
+
+        BindParameters(command, minAspectRatio, maxAspectRatio, null);
+        command.Parameters.AddWithValue("@MaxCount", maxCount);
+
+        using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            list.Add(new ImageRecord(
+                reader.GetString(0),
+                reader.GetInt32(1),
+                reader.GetInt32(2),
+                reader.GetDouble(3),
+                reader.GetInt64(4),
+                reader.GetInt32(5) != 0
+            ));
+        }
+
+        return list;
+    }
+
     private static void BindParameters(SqliteCommand command, double? minAspectRatio, double? maxAspectRatio, DateTime? maxLastUsed)
     {
         if (minAspectRatio.HasValue)

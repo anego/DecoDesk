@@ -47,8 +47,9 @@ public sealed class WallpaperRenderer
             IsAntialias = true
         };
 
+        // 大幅な縮小描画時のジャギー・モアレを防ぐため、ミップマップ付きサンプリングを使用する
         var destRect = new SKRect(x, y, x + drawWidth, y + drawHeight);
-        canvas.DrawBitmap(source, destRect, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None), paint);
+        canvas.DrawBitmap(source, destRect, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear), paint);
 
         return targetBitmap;
     }
@@ -150,8 +151,9 @@ public sealed class WallpaperRenderer
             IsAntialias = true
         };
 
+        // 原寸から大幅に縮小して回転描画するため、ミップマップ付きサンプリングでエイリアシング（輪郭のジャギー）を防ぐ
         var innerRect = new SKRect(-halfOuterW + borderSize, -halfOuterH + borderSize, halfOuterW - borderSize, halfOuterH - borderSize);
-        canvas.DrawBitmap(bitmap, innerRect, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None), imagePaint);
+        canvas.DrawBitmap(bitmap, innerRect, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear), imagePaint);
 
         canvas.Restore();
     }
@@ -198,7 +200,7 @@ public sealed class WallpaperRenderer
         };
 
         var rect = new SKRect(-width / 2.0f, -height / 2.0f, width / 2.0f, height / 2.0f);
-        canvas.DrawBitmap(bitmap, rect, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None), paint);
+        canvas.DrawBitmap(bitmap, rect, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear), paint);
         canvas.Restore();
     }
 
@@ -303,13 +305,47 @@ public sealed class WallpaperRenderer
         int count = paths.Count;
         if (count == 0) return;
 
-        // 画像数に対して約1.55倍 of グリッドセルを生成し、空きセルを作ることで整列規則性を排除する
-        int cellCount = (int)Math.Ceiling(count * 1.55);
-        if (cellCount < 8) cellCount = 8; // 最低でもまばらに散らすため多めのセルを用意
+        // 空きセルを原則廃止し、配置枚数＝セル数とする（大領域の空白地帯を解消）
+        int cellCount = count;
 
-        // 画面比率に応じた列数・行数を決定
-        int cols = (int)Math.Ceiling(Math.Sqrt(cellCount * 1.6));
-        int rows = (int)Math.Ceiling((double)cellCount / cols);
+        // 画像の枚数に応じた最適な行数・列数を決定（画面全体に満遍なく並ぶようにマッピング）
+        int cols, rows;
+        if (count <= 3)
+        {
+            cols = count;
+            rows = 1;
+        }
+        else if (count <= 4)
+        {
+            cols = 2;
+            rows = 2;
+        }
+        else if (count <= 6)
+        {
+            cols = 3;
+            rows = 2;
+        }
+        else if (count <= 8)
+        {
+            cols = 4;
+            rows = 2;
+        }
+        else if (count <= 9)
+        {
+            cols = 3;
+            rows = 3;
+        }
+        else if (count <= 12)
+        {
+            cols = 4;
+            rows = 3;
+        }
+        else
+        {
+            // 12枚を超える場合の汎用アスペクト比考慮の分割数決定
+            cols = (int)Math.Ceiling(Math.Sqrt(count * 1.6));
+            rows = (int)Math.Ceiling((double)count / cols);
+        }
 
         int cellWidth = canvasWidth / cols;
         int cellHeight = canvasHeight / rows;
@@ -325,6 +361,9 @@ public sealed class WallpaperRenderer
         // 指定されたピクセルサイズに配置密度（0.5 〜 1.5）を適用して最終サイズを算出
         float scaleFactor = 0.84f * (float)density;
         float baseSize = imageSize * scaleFactor;
+
+        // 配置済み画像の矩形を追跡するリスト
+        var placedRects = new System.Collections.Generic.List<SKRect>();
 
         for (int i = 0; i < Math.Min(count, cellIndices.Count); i++)
         {
@@ -355,13 +394,68 @@ public sealed class WallpaperRenderer
                     drawWidth = baseSize * ratio;
                 }
 
-                // セル内でのジッター（規則性を壊すため、セル幅・高さの最大38%までのズレを許容する）
-                float jitterX = (float)((Rand.NextDouble() * 2.0 - 1.0) * cellWidth * 0.38f);
-                float jitterY = (float)((Rand.NextDouble() * 2.0 - 1.0) * cellHeight * 0.38f);
+                // フチと影の余白を考慮した安全マージン（ディスプレイの四辺から画像がはみ出すのを防ぐ）
+                float borderSize = Math.Max(8.0f, Math.Min(drawWidth, drawHeight) * 0.04f);
+                float margin = borderSize + 15.0f; // フチの厚み ＋ シャドウのぼかし・オフセット幅
 
-                float x = cellCenterX - drawWidth / 2.0f + jitterX;
-                float y = cellCenterY - drawHeight / 2.0f + jitterY;
-                
+                // 衝突回避と段階的収縮付きリトライ処理（最大15回リトライして重なり合いを5割未満に制御）
+                float x = 0, y = 0;
+                float jitterX = 0, jitterY = 0;
+                SKRect currentRect = default;
+                const int MaxRetries = 15;
+
+                for (int retry = 0; retry < MaxRetries; retry++)
+                {
+                    // リトライごとにジッター許容幅を縮小し、最終的にはセルの中心方向へ収束させる (1.0 -> 0.0)
+                    float shrinkFactor = 1.0f - ((float)retry / MaxRetries);
+                    float currentJitterLimit = 0.46f * shrinkFactor;
+
+                    jitterX = (float)((Rand.NextDouble() * 2.0 - 1.0) * cellWidth * currentJitterLimit);
+                    jitterY = (float)((Rand.NextDouble() * 2.0 - 1.0) * cellHeight * currentJitterLimit);
+
+                    x = cellCenterX - drawWidth / 2.0f + jitterX;
+                    y = cellCenterY - drawHeight / 2.0f + jitterY;
+
+                    // 画面の端からマージン分内側に強制的にクランプ（見切れを防止）
+                    x = Math.Clamp(x, margin, canvasWidth - drawWidth - margin);
+                    y = Math.Clamp(y, margin, canvasHeight - drawHeight - margin);
+
+                    currentRect = new SKRect(x, y, x + drawWidth, y + drawHeight);
+
+                    bool hasTooMuchOverlap = false;
+                    float currentArea = drawWidth * drawHeight;
+
+                    foreach (var existRect in placedRects)
+                    {
+                        // 2つの矩形が交差しているか自前で判定
+                        bool intersects = existRect.Left < currentRect.Right && currentRect.Left < existRect.Right &&
+                                         existRect.Top < currentRect.Bottom && currentRect.Top < existRect.Bottom;
+
+                        if (intersects)
+                        {
+                            var intersect = SKRect.Intersect(existRect, currentRect);
+                            float intersectArea = intersect.Width * intersect.Height;
+
+                            float existArea = existRect.Width * existRect.Height;
+
+                            // 既存画像または新規画像のいずれかが 50% 以上隠れてしまうかチェック
+                            if ((intersectArea / existArea > 0.50f) || (intersectArea / currentArea > 0.50f))
+                            {
+                                hasTooMuchOverlap = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!hasTooMuchOverlap)
+                    {
+                        break;
+                    }
+                }
+
+                // 確定した矩形を配置済みリストに追跡登録
+                placedRects.Add(currentRect);
+
                 // 規則性を崩すための回転角（-20度 〜 +20度）への拡張
                 float angle = (float)((Rand.NextDouble() * 2.0 - 1.0) * 20.0f);
 
@@ -371,7 +465,7 @@ public sealed class WallpaperRenderer
                 if (isCorkboard)
                 {
                     // プッシュピンを画像上部中央（フチの上）に配置
-                    float borderSize = Math.Max(8.0f, Math.Min(drawWidth, drawHeight) * 0.04f);
+                    borderSize = Math.Max(8.0f, Math.Min(drawWidth, drawHeight) * 0.04f);
                     float pinX = x + drawWidth / 2.0f;
                     float pinY = y - borderSize * 0.5f;
                     DrawPushPin(canvas, pinX, pinY, angle);

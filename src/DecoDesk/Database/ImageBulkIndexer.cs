@@ -3,6 +3,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.IO;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging;
 using DecoDesk.IO;
 
 namespace DecoDesk.Database;
@@ -12,6 +13,8 @@ namespace DecoDesk.Database;
 /// </summary>
 public sealed class ImageBulkIndexer
 {
+    private static readonly ILogger Logger = OS.AppLoggerFactory.CreateLogger<ImageBulkIndexer>();
+
     private readonly DatabaseManager _dbManager;
     private const int BatchSize = 2000;
 
@@ -191,11 +194,16 @@ public sealed class ImageBulkIndexer
             idx++;
         }
 
-        if (conditions.Count > 0)
+        if (conditions.Count == 0)
         {
-            sql.Append(" WHERE ");
-            sql.Append(string.Join(" AND ", conditions));
+            // 有効な登録ディレクトリが1件も無い場合、WHERE句なしの全件DELETEを実行すると
+            // データベースの内容を全消去してしまうため、安全のため何もせず処理を中断する。
+            Logger.LogWarning("有効な登録ディレクトリが存在しないため、孤立レコードのクリーンアップをスキップしました。");
+            return;
         }
+
+        sql.Append(" WHERE ");
+        sql.Append(string.Join(" AND ", conditions));
 
         command.CommandText = sql.ToString();
         await command.ExecuteNonQueryAsync();

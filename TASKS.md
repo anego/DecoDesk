@@ -30,3 +30,11 @@
 ## Phase 5: 最適化とバックグラウンド同期
 - [x] 5-1. `FileSystemWatcher` または類似の手段を用いて、指定ディレクトリの変更（追加・削除・リネーム）を検知し、DBを非同期で更新する処理を実装する。
 - [x] 5-2. 実際の大規模ディレクトリでのパフォーマンステストと、メモリプロファイリングを実施する。
+
+## 修正タスク（コードレビュー指摘事項 2026-07-28）
+- [x] R-1. `ImageBulkIndexer.DeleteOrphanedRecordsAsync` にて、有効な登録ディレクトリが1つも無い場合に `WHERE` 句なしの `DELETE FROM Images` が実行され全件削除されてしまう問題を修正する。
+- [x] R-2. アプリ起動時のコマンドライン引数を解析し、「One-shotモード（壁紙を1回変えてすぐ終了）」を実装する（`01_architecture.md` で要求されていたが未実装だった）。
+- [x] R-3. `AppSettings` の未使用な Obsolete 互換プロパティ（`TargetDirectory`, `UpdateIntervalMinutes`）を削除する。
+
+## 修正タスク（画質不具合 2026-07-28）
+- [x] R-4. ポストカード/コルクボード風モードで画像を斜めに配置した際、輪郭がジャギー（ガタガタ）になる問題を修正する。原因は縮小描画時の `SKMipmapMode.None` によるエイリアシング。`SKMipmapMode.Linear` に変更する。
