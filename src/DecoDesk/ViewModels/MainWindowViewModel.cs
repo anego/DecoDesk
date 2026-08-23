@@ -38,6 +38,10 @@ public sealed class MainWindowViewModel : ViewModelBase
     private string _progressText = "未スキャン";
     private CancellationTokenSource? _indexingCts;
 
+    private bool _isDirty;
+    private bool _isRenderDirty;
+    private bool _isLoaded;
+
     /// <summary>
     /// 設定項目「対象ディレクトリ（複数）」のバインド用プロパティ
     /// </summary>
@@ -78,6 +82,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             if (SetProperty(ref _updateIntervalSeconds, value))
             {
                 Logger.LogDebug("UpdateIntervalSeconds が変更されました: {NewValue}秒", value);
+                MarkDirty();
             }
         }
     }
@@ -121,6 +126,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             {
                 OnPropertyChanged(nameof(IsProcessingModeAdvanced));
                 OnPropertyChanged(nameof(IsPostcardModeSelected));
+                MarkDirty(affectsRendering: true);
             }
         }
     }
@@ -131,7 +137,13 @@ public sealed class MainWindowViewModel : ViewModelBase
     public bool AutoUpdateEnabled
     {
         get => _autoUpdateEnabled;
-        set => SetProperty(ref _autoUpdateEnabled, value);
+        set
+        {
+            if (SetProperty(ref _autoUpdateEnabled, value))
+            {
+                MarkDirty();
+            }
+        }
     }
 
     /// <summary>
@@ -140,7 +152,13 @@ public sealed class MainWindowViewModel : ViewModelBase
     public bool StartWithWindows
     {
         get => _startWithWindows;
-        set => SetProperty(ref _startWithWindows, value);
+        set
+        {
+            if (SetProperty(ref _startWithWindows, value))
+            {
+                MarkDirty();
+            }
+        }
     }
 
     /// <summary>
@@ -154,6 +172,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             if (SetProperty(ref _updateWallpaperOnStartup, value))
             {
                 OnPropertyChanged(nameof(IsStartupDelaySliderEnabled));
+                MarkDirty();
             }
         }
     }
@@ -164,7 +183,13 @@ public sealed class MainWindowViewModel : ViewModelBase
     public int StartupDelaySeconds
     {
         get => _startupDelaySeconds;
-        set => SetProperty(ref _startupDelaySeconds, value);
+        set
+        {
+            if (SetProperty(ref _startupDelaySeconds, value))
+            {
+                MarkDirty();
+            }
+        }
     }
 
     /// <summary>
@@ -173,7 +198,13 @@ public sealed class MainWindowViewModel : ViewModelBase
     public int WallpaperImageCount
     {
         get => _wallpaperImageCount;
-        set => SetProperty(ref _wallpaperImageCount, value);
+        set
+        {
+            if (SetProperty(ref _wallpaperImageCount, value))
+            {
+                MarkDirty(affectsRendering: true);
+            }
+        }
     }
 
     /// <summary>
@@ -182,7 +213,13 @@ public sealed class MainWindowViewModel : ViewModelBase
     public int WallpaperImageSize
     {
         get => _wallpaperImageSize;
-        set => SetProperty(ref _wallpaperImageSize, value);
+        set
+        {
+            if (SetProperty(ref _wallpaperImageSize, value))
+            {
+                MarkDirty(affectsRendering: true);
+            }
+        }
     }
 
     /// <summary>
@@ -196,6 +233,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             if (SetProperty(ref _wallpaperBackgroundColor, value))
             {
                 OnPropertyChanged(nameof(BackgroundColorBrush));
+                MarkDirty(affectsRendering: true);
             }
         }
     }
@@ -230,6 +268,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             if (SetProperty(ref _wallpaperDensity, value))
             {
                 OnPropertyChanged(nameof(WallpaperDensityPercent));
+                MarkDirty(affectsRendering: true);
             }
         }
     }
@@ -245,6 +284,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             if (SetProperty(ref _wallpaperDensity, value / 100.0))
             {
                 OnPropertyChanged(nameof(WallpaperDensity));
+                MarkDirty(affectsRendering: true);
             }
         }
     }
@@ -313,6 +353,21 @@ public sealed class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>
+    /// 読み込み後に未保存の変更があるかどうかを示すプロパティ（保存ボタンの有効化状態に使用）
+    /// </summary>
+    public bool IsDirty
+    {
+        get => _isDirty;
+        private set
+        {
+            if (SetProperty(ref _isDirty, value))
+            {
+                CommandManager.InvalidateRequerySuggested();
+            }
+        }
+    }
+
+    /// <summary>
     /// 設定を保存するコマンドを取得します。
     /// </summary>
     public ICommand SaveCommand { get; }
@@ -355,14 +410,35 @@ public sealed class MainWindowViewModel : ViewModelBase
         _dbManager = dbManager ?? throw new ArgumentNullException(nameof(dbManager));
         _indexer = new ImageBulkIndexer(_dbManager);
 
-        SaveCommand = new RelayCommand(SaveSettings, () => !IsIndexing);
+        SaveCommand = new RelayCommand(SaveSettings, () => !IsIndexing && IsDirty);
         SelectColorCommand = new RelayCommand(SelectColor);
         StartIndexingCommand = new RelayCommand(async () => await StartIndexingAsync(), () => !IsIndexing && TargetDirectories.Count > 0);
         CancelIndexingCommand = new RelayCommand(CancelIndexing, () => IsIndexing);
         RemoveDirectoryCommand = new RelayCommand(RemoveDirectory, () => !IsIndexing && SelectedDirectory != null);
 
+        // 対象ディレクトリの追加・削除も「未保存の変更」として検知する（壁紙合成に影響するため再レンダリング対象）
+        _targetDirectories.CollectionChanged += (_, _) => MarkDirty(affectsRendering: true);
+
         // 保存された設定のロード
         LoadSettings();
+    }
+
+    /// <summary>
+    /// 設定読み込み完了後の変更を「未保存」としてマークします。読み込み処理中の変更は対象外とします。
+    /// </summary>
+    /// <param name="affectsRendering">壁紙の見た目（合成結果）に影響する設定項目の変更かどうか</param>
+    private void MarkDirty(bool affectsRendering = false)
+    {
+        if (!_isLoaded)
+        {
+            return;
+        }
+
+        IsDirty = true;
+        if (affectsRendering)
+        {
+            _isRenderDirty = true;
+        }
     }
 
     /// <summary>
@@ -371,8 +447,9 @@ public sealed class MainWindowViewModel : ViewModelBase
     public void LoadSettings()
     {
         Logger.LogInformation("設定ファイルからのロードを開始します。");
+        _isLoaded = false;
         var settings = _settingsManager.Load();
-        
+
         TargetDirectories.Clear();
         foreach (var dir in settings.TargetDirectories)
         {
@@ -399,6 +476,10 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         ProgressValue = 0;
         ProgressText = "設定を読み込みました。";
+
+        _isLoaded = true;
+        IsDirty = false;
+        _isRenderDirty = false;
     }
 
     /// <summary>
@@ -426,7 +507,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// <summary>
     /// 現在のプロパティ値をもとに設定をローカルファイルに保存します。
     /// </summary>
-    private async void SaveSettings()
+    private void SaveSettings()
     {
         Logger.LogInformation("設定の保存処理を開始します。");
         try
@@ -456,11 +537,41 @@ public sealed class MainWindowViewModel : ViewModelBase
 
             OS.WallpaperManager.Instance.RestartTimer();
 
-            // 新しいモード等をもとに即時に事前レンダリングバッファを再作成
-            await OS.WallpaperManager.Instance.RecreatePreRenderedWallpaperAsync();
+            // 壁紙の見た目に影響する設定（対象ディレクトリ、加工モード、枚数/サイズ/密度/背景色）が
+            // 変更された場合のみ、時間のかかる事前レンダリングバッファの再作成が必要となる
+            bool needsRerender = _isRenderDirty;
 
-            System.Windows.MessageBox.Show("設定を適用・保存しました。", "DecoDesk", MessageBoxButton.OK, MessageBoxImage.Information);
-            RequestClose?.Invoke();
+            IsDirty = false;
+            _isRenderDirty = false;
+
+            if (needsRerender)
+            {
+                System.Windows.MessageBox.Show("設定を保存しました。壁紙の再生成をバックグラウンドで実行します。完了するとタスクトレイに通知します。", "DecoDesk", MessageBoxButton.OK, MessageBoxImage.Information);
+                RequestClose?.Invoke();
+
+                // 画面を閉じた後もバックグラウンドで継続し、完了はタスクトレイ通知で知らせる（設定画面をブロックしない）
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        Logger.LogInformation("壁紙の見た目に影響する設定変更を検知したため、事前レンダリングバッファをバックグラウンドで再作成します。");
+                        await OS.WallpaperManager.Instance.RecreatePreRenderedWallpaperAsync();
+                        Logger.LogInformation("バックグラウンドでの事前レンダリングバッファの再作成が完了しました。");
+                        NotifyIconWrapper.Current?.ShowBalloonNotification("DecoDesk", "壁紙の再生成が完了しました。");
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogError(ex, "バックグラウンドでの事前レンダリングバッファの再作成中に例外が発生しました。");
+                        NotifyIconWrapper.Current?.ShowBalloonNotification("DecoDesk", $"壁紙の再生成に失敗しました: {ex.Message}", System.Windows.Forms.ToolTipIcon.Error);
+                    }
+                });
+            }
+            else
+            {
+                Logger.LogInformation("壁紙の見た目に影響する設定変更がなかったため、事前レンダリングの再作成をスキップしました。");
+                System.Windows.MessageBox.Show("設定を適用・保存しました。", "DecoDesk", MessageBoxButton.OK, MessageBoxImage.Information);
+                RequestClose?.Invoke();
+            }
         }
         catch (Exception ex)
         {
@@ -481,8 +592,10 @@ public sealed class MainWindowViewModel : ViewModelBase
         ProgressText = "走査開始...";
         _indexingCts = new CancellationTokenSource();
 
+        ImageBulkIndexer.IndexProgress? lastProgress = null;
         var progress = new Progress<ImageBulkIndexer.IndexProgress>(p =>
         {
+            lastProgress = p;
             ProgressText = $"{p.FoundCount:N0}ファイル検出、{p.IndexedCount:N0}ファイルをデータベースに登録完了";
             // スキャンの進捗率は総ファイル数が判明するまでは推測値となるため、
             // 登録数に合わせてUIの進捗表記を更新（1ファイルあたり一定のプログレス値でインジケータを駆動）
@@ -497,7 +610,10 @@ public sealed class MainWindowViewModel : ViewModelBase
             });
             ProgressText = "インデックスの同期が正常に完了しました。";
             ProgressValue = 100;
-            System.Windows.MessageBox.Show("画像データベースの同期が完了しました。", "DecoDesk", MessageBoxButton.OK, MessageBoxImage.Information);
+
+            // 設定画面を閉じていても完了が分かるよう、タスクトレイ通知で知らせる（モーダルダイアログは表示しない）
+            var indexedCount = lastProgress?.IndexedCount ?? 0;
+            NotifyIconWrapper.Current?.ShowBalloonNotification("DecoDesk", $"画像データベースの同期が完了しました。（{indexedCount:N0}ファイルを登録）");
         }
         catch (OperationCanceledException)
         {

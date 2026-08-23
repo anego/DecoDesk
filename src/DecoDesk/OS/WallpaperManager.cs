@@ -21,6 +21,11 @@ public sealed class WallpaperManager : IDisposable
     private static readonly ILogger Logger = AppLoggerFactory.CreateLogger<WallpaperManager>();
 
     /// <summary>
+    /// 隙間埋めパス（自動補充）用の余剰候補も含めて、1モニターあたりに取得する画像候補プールの上限枚数。
+    /// </summary>
+    private const int MaxAutoFillImagesPerMonitor = 40;
+
+    /// <summary>
     /// <see cref="WallpaperManager"/> のシングルトンインスタンスを取得します。
     /// </summary>
     public static WallpaperManager Instance => LazyInstance.Value;
@@ -406,7 +411,7 @@ public sealed class WallpaperManager : IDisposable
         // 2. モニターごとに個別に壁紙を描画して、巨大キャンバスの対応する座標に貼り付ける
         foreach (var monitor in _monitors)
         {
-            int imageCountNeeded = settings.ProcessingMode switch
+            int minImageCount = settings.ProcessingMode switch
             {
                 "None" => 1,
                 "Postcard" => settings.WallpaperImageCount,
@@ -424,10 +429,12 @@ public sealed class WallpaperManager : IDisposable
                 maxRatio = monitorRatio * 1.2;
             }
 
-            var imagePaths = await GetRandomImagePathsAsync(imageCountNeeded, minRatio, maxRatio);
-            if (!imagePaths.Any())
+            // 最低保証枚数に加え、隙間埋めパス（自動補充）用の余剰候補もまとめて取得する
+            int poolSize = settings.ProcessingMode == "None" ? minImageCount : Math.Max(minImageCount, MaxAutoFillImagesPerMonitor);
+            var imagePaths = await GetCandidateImagePathsAsync(poolSize, minRatio, maxRatio);
+            if (imagePaths.Count < minImageCount)
             {
-                imagePaths = await GetRandomImagePathsAsync(imageCountNeeded, null, null);
+                imagePaths = await GetCandidateImagePathsAsync(poolSize, null, null);
             }
 
             if (!imagePaths.Any())
@@ -436,18 +443,36 @@ public sealed class WallpaperManager : IDisposable
             }
 
             // モニター用の合成画像を生成
-            using SKBitmap monitorBitmap = settings.ProcessingMode switch
-            {
-                "None" => _renderer.CreateGridComposite(imagePaths, monitor.Width, monitor.Height),
-                "Postcard" => _renderer.CreateRandomComposite(imagePaths, monitor.Width, monitor.Height, settings.WallpaperImageSize, settings.WallpaperDensity, settings.WallpaperBackgroundColor),
-                "Corkboard" => _renderer.CreateCorkboardComposite(imagePaths, monitor.Width, monitor.Height, settings.WallpaperImageSize, settings.WallpaperDensity),
-                _ => _renderer.CreateGridComposite(imagePaths, monitor.Width, monitor.Height)
-            };
+            SKBitmap monitorBitmap;
+            List<string> usedPaths;
 
-            // 巨大スパン用キャンバスの、各モニターの配置位置に描画 (オフセット変換)
-            float destX = monitor.Left - minLeft;
-            float destY = monitor.Top - minTop;
-            spanCanvas.DrawBitmap(monitorBitmap, destX, destY, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear), null);
+            switch (settings.ProcessingMode)
+            {
+                case "Postcard":
+                    monitorBitmap = _renderer.CreateRandomComposite(imagePaths, monitor.Width, monitor.Height, minImageCount, settings.WallpaperImageSize, settings.WallpaperDensity, settings.WallpaperBackgroundColor, out usedPaths);
+                    break;
+                case "Corkboard":
+                    monitorBitmap = _renderer.CreateCorkboardComposite(imagePaths, monitor.Width, monitor.Height, minImageCount, settings.WallpaperImageSize, settings.WallpaperDensity, out usedPaths);
+                    break;
+                default:
+                    monitorBitmap = _renderer.CreateGridComposite(imagePaths, monitor.Width, monitor.Height);
+                    usedPaths = new List<string> { imagePaths[0] };
+                    break;
+            }
+
+            using (monitorBitmap)
+            {
+                // 巨大スパン用キャンバスの、各モニターの配置位置に描画 (オフセット変換)
+                float destX = monitor.Left - minLeft;
+                float destY = monitor.Top - minTop;
+                spanCanvas.DrawBitmap(monitorBitmap, destX, destY, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear), null);
+            }
+
+            // 実際に配置に使われた画像のみ使用履歴を更新する（隙間埋めで余った候補は対象外）
+            foreach (var path in usedPaths)
+            {
+                await UpdateImageLastUsedAsync(path);
+            }
         }
 
         // 次回適用予定のスロットに PNG として書き出し
@@ -461,18 +486,20 @@ public sealed class WallpaperManager : IDisposable
     }
 
     /// <summary>
-    /// 条件に合致する画像をデータベースからランダムに指定枚数取得し、使用日時を現在に更新します。
+    /// 条件に合致する画像候補をデータベースからランダムに指定枚数（プールサイズ）取得します。
+    /// 実際に壁紙へ配置されるとは限らないため、この時点では使用履歴（LastUsed）は更新しません。
+    /// 呼び出し側が実際に使用した画像に対してのみ <see cref="UpdateImageLastUsedAsync"/> を呼び出してください。
     /// </summary>
-    private async Task<List<string>> GetRandomImagePathsAsync(int count, double? minRatio, double? maxRatio)
+    private async Task<List<string>> GetCandidateImagePathsAsync(int poolSize, double? minRatio, double? maxRatio)
     {
         var paths = new List<string>();
 
         // 必要な枚数の3倍の候補（未使用・古い画像）を一括取得する
-        int candidateCount = count * 3;
+        int candidateCount = poolSize * 3;
         var candidates = await _dbManager.GetLeastUsedImagesAsync(candidateCount, minRatio, maxRatio);
 
         // 指定アスペクト比条件で画像が足りない場合、アスペクト比の制限をなくして全体から取得を試みる
-        if (candidates.Count < count)
+        if (candidates.Count < poolSize)
         {
             candidates = await _dbManager.GetLeastUsedImagesAsync(candidateCount, null, null);
         }
@@ -484,17 +511,16 @@ public sealed class WallpaperManager : IDisposable
 
         // 候補リストをランダムシャッフル
         var random = new Random();
-        var shuffled = candidates.OrderBy(_ => random.Next()).ToList();
+        var shuffled = candidates.OrderBy(_ => random.Next());
 
-        // 必要な件数だけ取り出し、使用履歴を更新する
+        // プールサイズ分だけ重複なく取り出す
         foreach (var record in shuffled)
         {
-            if (paths.Count >= count) break;
+            if (paths.Count >= poolSize) break;
 
             if (!paths.Contains(record.Path))
             {
                 paths.Add(record.Path);
-                await UpdateImageLastUsedAsync(record.Path);
             }
         }
 

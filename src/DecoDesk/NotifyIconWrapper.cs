@@ -15,12 +15,19 @@ public sealed class NotifyIconWrapper : IDisposable
     private bool _disposed;
 
     /// <summary>
+    /// アプリケーション全体で唯一生成される <see cref="NotifyIconWrapper"/> のインスタンスを取得します。
+    /// バックグラウンド処理（インデックス作成など）からタスクトレイ通知を表示するために使用します。
+    /// </summary>
+    public static NotifyIconWrapper? Current { get; private set; }
+
+    /// <summary>
     /// <see cref="NotifyIconWrapper"/> クラスの新しいインスタンスを初期化します。
     /// </summary>
     /// <param name="mainWindow">設定画面として表示するメインウィンドウ</param>
     public NotifyIconWrapper(MainWindow mainWindow)
     {
         _mainWindow = mainWindow ?? throw new ArgumentNullException(nameof(mainWindow));
+        Current = this;
 
         // NotifyIconの初期化。埋め込みリソースからアイコンを読み込む
         _notifyIcon = new NotifyIcon
@@ -61,6 +68,12 @@ public sealed class NotifyIconWrapper : IDisposable
         var settingsItem = new ToolStripMenuItem("設定");
         settingsItem.Click += (s, e) => ShowSettings();
         contextMenu.Items.Add(settingsItem);
+
+        contextMenu.Items.Add(new ToolStripSeparator());
+
+        var versionItem = new ToolStripMenuItem("バージョン情報");
+        versionItem.Click += (s, e) => ShowVersionInfo();
+        contextMenu.Items.Add(versionItem);
 
         contextMenu.Items.Add(new ToolStripSeparator());
 
@@ -112,6 +125,15 @@ public sealed class NotifyIconWrapper : IDisposable
     }
 
     /// <summary>
+    /// バージョン情報ダイアログを表示します。
+    /// </summary>
+    private void ShowVersionInfo()
+    {
+        var versionWindow = new VersionWindow();
+        versionWindow.ShowDialog();
+    }
+
+    /// <summary>
     /// アプリケーションを終了します。
     /// </summary>
     private void ExitApplication()
@@ -120,11 +142,33 @@ public sealed class NotifyIconWrapper : IDisposable
     }
 
     /// <summary>
+    /// タスクトレイからWindowsの通知（バルーン/トースト）を表示します。
+    /// 設定画面を開いていない場合でも、バックグラウンド処理の完了などをユーザーに知らせるために使用します。
+    /// </summary>
+    /// <param name="title">通知のタイトル</param>
+    /// <param name="message">通知本文</param>
+    /// <param name="icon">通知アイコンの種類</param>
+    public void ShowBalloonNotification(string title, string message, ToolTipIcon icon = ToolTipIcon.Info)
+    {
+        if (_disposed) return;
+
+        _notifyIcon.BalloonTipTitle = title;
+        _notifyIcon.BalloonTipText = message;
+        _notifyIcon.BalloonTipIcon = icon;
+        _notifyIcon.ShowBalloonTip(5000);
+    }
+
+    /// <summary>
     /// NotifyIcon のリソースを解放します。
     /// </summary>
     public void Dispose()
     {
         if (_disposed) return;
+
+        if (Current == this)
+        {
+            Current = null;
+        }
 
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
