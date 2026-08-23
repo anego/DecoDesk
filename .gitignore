@@ -6,6 +6,10 @@
 bin/
 obj/
 
+# WPFのマークアップコンパイルが生成する一時プロジェクトファイル
+# ビルド中断時などにプロジェクト直下へ残留することがあるため除外する
+*_wpftmp.csproj
+
 # Common node modules locations
 /node_modules
 /wwwroot/node_modules
@@ -89,3 +93,8 @@ $RECYCLE.BIN/
 *.lnk
 
 # End of https://www.toptal.com/developers/gitignore/api/dotnetcore,windows,macos,visualstudiocode
+
+### DecoDesk ###
+# ローカルの作業メモ（git管理に含めない）
+MEMO.md
+2026-07-11.md
