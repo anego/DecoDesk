@@ -86,8 +86,8 @@
       - 新規: `CHANGELOG.md`, `LICENSE`, `src/DecoDesk/OS/FullScreenDetector.cs`
       - 変更: `README.md`, `DEVELOP.md`, `TASKS.md`, `src/DecoDesk/DecoDesk.csproj`, `src/DecoDesk/NotifyIconWrapper.cs`, `src/DecoDesk/OS/WallpaperManager.cs`
       - 機能追加（F-7）とドキュメント整備は性質が異なるため、`feat:` と `docs:` の2コミットに分けるのが望ましい。
-- [ ] B-5. （RL-C・RL-D の完了後に実施）`v1.0.0` タグを作成する。
-      **タグは RL-B の最後ではなく、README・LICENSE の整備と配布物の動作確認を終えてから打つこと。** GitHub Releases はタグを起点に公開されるため、先にタグを打つと README も LICENSE も含まれない状態が `v1.0.0` として固定されてしまう。
+- [x] B-5. `v1.0.0` タグを作成する。→ 完了。`3a79450` に注釈付きタグを作成し push 済み。
+      **※ 当初は「RL-C・RL-D・RL-E の完了後」としていたが、RL-E（手動動作確認）が未完了の状態でタグを打っている。** 非公開リポジトリのため取り消しが容易であることを前提とした判断。RL-E で問題が見つかった場合は、タグとリリースを削除して作り直す（手順は RL-E 末尾に記載）。
 
 ### RL-C. 配布物の作成
 - [x] C-1. `dotnet publish` の設定を確定する。→ 設定を `DecoDesk.csproj` に集約し、publish コマンドを以下まで簡略化した。指定漏れによる壊れた exe の生成を防ぐため、CLIオプションではなく csproj 側に持たせている。
@@ -106,7 +106,8 @@
       - タスクトレイにアイコンが常駐すること（初回は自己展開のため起動が遅いことがある）
       - 右クリックメニューが5項目（今すぐ変更 / 自動更新を一時停止 / 設定 / バージョン情報 / 終了）表示されること
       - バージョン情報ダイアログに `1.0.0` が表示されること
-- [ ] C-3. 配布用zipを作成する（exe + README + LICENSE）。※ D-1・D-2 の完了が前提。
+- [x] C-3. 配布用zipを作成する。→ `DecoDesk-v1.0.0-win-x64.zip`（**72.9MB**）。同梱物は `DecoDesk.exe` / `README.md` / `LICENSE` / `CHANGELOG.md`。
+      exe 自体が既に圧縮済み（`EnableCompressionInSingleFile`）のため、zip 化による追加の圧縮効果はほとんどない（78.3MB → 72.9MB）。
 
 ### RL-D. ドキュメント
 - [x] D-1. `README.md` を拡充する。→ 機能概要、動作要件、インストール、タスクトレイメニュー、初回セットアップ手順、One-shotモード、データ保存場所、アンインストール手順、使用ライブラリ、ライセンスを記載した。
@@ -135,9 +136,21 @@
 - [ ] E-8. 全画面アプリの自動検出（F-7）を確認する。更新間隔を10秒などに短くした状態で全画面のゲームを起動し、壁紙が切り替わらないこと、終了後に再開することを確認する。ログ（`%TEMP%\DecoDesk\log_*.txt`）に「全画面アプリケーションの動作を検出したため、壁紙の更新を見送ります」が記録される。
       - ボーダーレスウィンドウのゲームでは検出されない場合がある。その挙動も確認し、README の記述と合っているかを見る。
 
+> **RL-E で問題が見つかった場合のやり直し手順**
+> タグとリリースは `v1.0.0` として公開済みだが、非公開リポジトリのため作り直せる。
+> ```
+> gh release delete v1.0.0 --yes
+> git push --delete origin v1.0.0
+> git tag -d v1.0.0
+> ```
+> 修正をコミットした後、`dotnet publish` → zip 作成 → タグ作成 → `gh release create` を再実行する。
+> 既に第三者へ配布している場合は、タグを動かさず `v1.0.1` として新たに切ること。
+
 ### RL-F. GitHub 公開
 - [x] F-1. `gh auth login` を実行して GitHub CLI にログインする。→ 完了。account `anego` でログイン済み。
-- [ ] F-2. GitHub にリポジトリを作成し、`git remote add origin` でリモートを登録して push する。
-      リポジトリは未作成（`gh repo list` に DecoDesk は存在しない）。リモートも未登録。公開/非公開の選択が必要。
-- [ ] F-3. push 前に、コミット対象に秘密情報や不要な個人パスが含まれていないか確認する。
-- [ ] F-4. GitHub Releases で `v1.0.0` を作成し、配布用zipを添付する。
+- [x] F-2. GitHub にリポジトリを作成し、リモートを登録して push する。→ **https://github.com/anego/DecoDesk （PRIVATE）**。`master` を push 済み。
+- [x] F-3. push 前に、コミット対象に秘密情報や不要な個人パスが含まれていないか確認する。→ 実施。
+      - `.env` 系ファイルの混入なし。秘密情報らしき文字列の検出結果はすべて `CancellationToken` の誤検出。
+      - **`tests/DecoDesk.Tests/PerformanceProfilerTests.cs` に Windows のユーザー名を含むパスがハードコードされていた**ため、汎用的な `TestUser` へ置き換えた（`3a79450`）。秘密情報ではないが、将来リポジトリを公開した場合にユーザー名が露出するため。
+- [x] F-4. GitHub Releases で `v1.0.0` を作成し、配布用zipを添付する。→ **https://github.com/anego/DecoDesk/releases/tag/v1.0.0**
+      添付: `DecoDesk-v1.0.0-win-x64.zip`（76,468,435 bytes / sha256 `47b17f73...`）。draft でも prerelease でもない通常リリース。
