@@ -12,6 +12,7 @@ public sealed class NotifyIconWrapper : IDisposable
 {
     private readonly NotifyIcon _notifyIcon;
     private readonly MainWindow _mainWindow;
+    private ToolStripMenuItem? _pauseAutoUpdateItem;
     private bool _disposed;
 
     /// <summary>
@@ -64,6 +65,13 @@ public sealed class NotifyIconWrapper : IDisposable
         var changeNowItem = new ToolStripMenuItem("今すぐ変更");
         changeNowItem.Click += ChangeWallpaperNow;
         contextMenu.Items.Add(changeNowItem);
+
+        _pauseAutoUpdateItem = new ToolStripMenuItem("自動更新を一時停止");
+        _pauseAutoUpdateItem.Click += (s, e) => ToggleAutoUpdatePause();
+        contextMenu.Items.Add(_pauseAutoUpdateItem);
+
+        // メニューを開くたびに最新の状態を反映する（設定画面やバックグラウンド処理による変化に追従するため）
+        contextMenu.Opening += (s, e) => RefreshAutoUpdatePauseState();
 
         var settingsItem = new ToolStripMenuItem("設定");
         settingsItem.Click += (s, e) => ShowSettings();
@@ -122,6 +130,45 @@ public sealed class NotifyIconWrapper : IDisposable
         {
             System.Windows.MessageBox.Show($"壁紙の更新中にエラーが発生しました:\n{ex.Message}", "DecoDesk", MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    /// <summary>
+    /// 壁紙の自動更新の一時停止と再開を切り替えます。
+    /// </summary>
+    private void ToggleAutoUpdatePause()
+    {
+        var manager = OS.WallpaperManager.Instance;
+
+        if (manager.IsAutoUpdatePaused)
+        {
+            manager.ResumeAutoUpdate();
+            ShowBalloonNotification("DecoDesk", "壁紙の自動更新を再開しました。");
+        }
+        else
+        {
+            manager.PauseAutoUpdate();
+            ShowBalloonNotification("DecoDesk", "壁紙の自動更新を一時停止しました。再開するまで壁紙は変更されません。");
+        }
+
+        RefreshAutoUpdatePauseState();
+    }
+
+    /// <summary>
+    /// 一時停止の状態を、メニューのチェック表示とタスクトレイのツールチップに反映します。
+    /// </summary>
+    private void RefreshAutoUpdatePauseState()
+    {
+        if (_disposed) return;
+
+        var isPaused = OS.WallpaperManager.Instance.IsAutoUpdatePaused;
+
+        if (_pauseAutoUpdateItem != null)
+        {
+            _pauseAutoUpdateItem.Checked = isPaused;
+        }
+
+        // メニューを開かなくても停止中であることが分かるよう、ツールチップにも状態を表示する
+        _notifyIcon.Text = isPaused ? "DecoDesk - 自動更新を一時停止中" : "DecoDesk";
     }
 
     /// <summary>

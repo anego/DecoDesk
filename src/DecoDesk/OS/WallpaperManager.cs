@@ -35,9 +35,12 @@ public sealed class WallpaperManager : IDisposable
     private readonly WallpaperRenderer _renderer;
     private readonly string _tempDir;
     private readonly object _timerLock = new();
+    private readonly object _preRenderLock = new();
 
     private System.Threading.Timer? _updateTimer;
     private CancellationTokenSource? _startupDelayCts;
+    private CancellationTokenSource? _preRenderCts;
+    private volatile bool _isAutoUpdatePaused;
     private readonly List<DirectoryWatcher> _directoryWatchers = new();
     private List<MonitorAreaInfo> _monitors = new();
     private bool _isPreRenderedReady;
@@ -68,6 +71,13 @@ public sealed class WallpaperManager : IDisposable
             Height = height;
         }
     }
+
+    /// <summary>
+    /// 壁紙の自動更新が一時停止中かどうかを示す値を取得します。
+    /// この状態は設定ファイルへ永続化されず、アプリケーションの実行中のみ保持されます。
+    /// 恒久的に自動更新を無効化する場合は、設定画面の「自動更新を有効にする」を使用してください。
+    /// </summary>
+    public bool IsAutoUpdatePaused => _isAutoUpdatePaused;
 
     private string GetNextSpanPath() => _useA ? _spanPathA : _spanPathB;
     private void ToggleSpan() => _useA = !_useA;
@@ -215,7 +225,113 @@ public sealed class WallpaperManager : IDisposable
     }
 
     /// <summary>
+    /// 壁紙の自動更新を一時停止します。自動更新タイマーを停止し、
+    /// 実行中の事前レンダリング処理もキャンセルします。
+    /// ゲームプレイ中など、一時的に処理負荷を発生させたくない場合に使用します。
+    /// </summary>
+    public void PauseAutoUpdate()
+    {
+        lock (_timerLock)
+        {
+            if (_isAutoUpdatePaused)
+            {
+                return;
+            }
+
+            _isAutoUpdatePaused = true;
+
+            _updateTimer?.Dispose();
+            _updateTimer = null;
+
+            // 起動時更新の待機中であれば、それも取りやめる
+            _startupDelayCts?.Cancel();
+
+            Logger.LogInformation("壁紙の自動更新を一時停止しました。");
+        }
+
+        // 実行中の事前レンダリング（画像の合成とPNGエンコード）を打ち切る。
+        // これを行わないと、一時停止した直後に処理負荷が残り続けてしまう。
+        CancelRunningPreRender();
+    }
+
+    /// <summary>
+    /// 一時停止していた壁紙の自動更新を再開します。
+    /// 再開時に事前レンダリングバッファが失われている場合は、バックグラウンドで再生成します。
+    /// </summary>
+    public void ResumeAutoUpdate()
+    {
+        lock (_timerLock)
+        {
+            if (!_isAutoUpdatePaused)
+            {
+                return;
+            }
+
+            _isAutoUpdatePaused = false;
+            Logger.LogInformation("壁紙の自動更新を再開します。");
+        }
+
+        // 一時停止によって事前レンダリングが中断されている場合、次回のタイマー発火時に
+        // その場での生成（同期フォールバック）が走り、切り替えが遅延する。
+        // 再開直後のこのタイミングで生成しておくことで、それを避ける。
+        if (!_isPreRenderedReady)
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await RecreatePreRenderedWallpaperAsync();
+                }
+                catch (OperationCanceledException)
+                {
+                    Logger.LogInformation("自動更新の再開に伴う事前レンダリングがキャンセルされました。");
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError(ex, "自動更新の再開に伴う事前レンダリング中に例外が発生しました。");
+                }
+            });
+        }
+
+        RestartTimer();
+    }
+
+    /// <summary>
+    /// 実行中の事前レンダリング処理をキャンセルします。
+    /// </summary>
+    private void CancelRunningPreRender()
+    {
+        lock (_preRenderLock)
+        {
+            if (_preRenderCts == null)
+            {
+                return;
+            }
+
+            Logger.LogInformation("実行中の事前レンダリング処理をキャンセルします。");
+            _preRenderCts.Cancel();
+        }
+    }
+
+    /// <summary>
+    /// 事前レンダリング用のキャンセルトークンを新たに発行します。
+    /// 既に実行中の事前レンダリングがある場合は、それをキャンセルしてから発行します。
+    /// </summary>
+    /// <returns>新たに発行されたキャンセルトークン</returns>
+    private CancellationToken RenewPreRenderToken()
+    {
+        lock (_preRenderLock)
+        {
+            _preRenderCts?.Cancel();
+            _preRenderCts?.Dispose();
+            _preRenderCts = new CancellationTokenSource();
+            return _preRenderCts.Token;
+        }
+    }
+
+    /// <summary>
     /// 設定ファイルの自動更新設定をロードし、タイマーおよび監視ディレクトリを再起動します。
+    /// 一時停止中（<see cref="IsAutoUpdatePaused"/>）の場合は、タイマーを起動しません。
     /// </summary>
     public void RestartTimer()
     {
@@ -230,6 +346,13 @@ public sealed class WallpaperManager : IDisposable
 
             // 監視ディレクトリの同期切り替え
             UpdateDirectoryWatchers(settings.TargetDirectories);
+
+            // 一時停止中は、設定の保存などを契機にタイマーが復活してしまわないよう明示的に抑止する
+            if (_isAutoUpdatePaused)
+            {
+                Logger.LogInformation("壁紙の自動更新が一時停止中のため、タイマーは起動しません。");
+                return;
+            }
 
             if (settings.AutoUpdateEnabled && settings.UpdateIntervalSeconds > 0)
             {
@@ -287,14 +410,29 @@ public sealed class WallpaperManager : IDisposable
     public async Task RecreatePreRenderedWallpaperAsync()
     {
         _isPreRenderedReady = false;
-        await PreRenderNextWallpaperAsync();
+        await PreRenderNextWallpaperAsync(RenewPreRenderToken());
     }
 
     /// <summary>
     /// タイマー発火時のコールバック。非同期で壁紙更新を実行します。
+    /// 一時停止中、または全画面アプリケーション（ゲームなど）の動作中は処理を見送ります。
     /// </summary>
     private async Task OnTimerFiredAsync()
     {
+        if (_isAutoUpdatePaused)
+        {
+            Logger.LogInformation("壁紙の自動更新が一時停止中のため、タイマー発火による更新を見送ります。");
+            return;
+        }
+
+        // ゲームプレイ中にフレームレート低下やラグを発生させないため、
+        // 全画面アプリケーションの動作中は壁紙の適用と事前レンダリングの両方を見送る。
+        // 見送った分は次回のタイマー発火時に改めて判定されるため、ゲーム終了後に自然に再開される。
+        if (FullScreenDetector.ShouldSuppressUpdate())
+        {
+            return;
+        }
+
         await TriggerUpdateNowAsync();
     }
 
@@ -316,7 +454,7 @@ public sealed class WallpaperManager : IDisposable
             var nextPath = GetNextSpanPath();
             if (!_isPreRenderedReady || !File.Exists(nextPath))
             {
-                await PreRenderNextWallpaperAsync();
+                await PreRenderNextWallpaperAsync(RenewPreRenderToken());
                 nextPath = GetNextSpanPath();
             }
 
@@ -329,11 +467,16 @@ public sealed class WallpaperManager : IDisposable
 
             // 3. 適用完了後、バックグラウンドスレッドで「次回適用分」のレンダリングを開始
             _isPreRenderedReady = false;
+            var preRenderToken = RenewPreRenderToken();
             _ = Task.Run(async () =>
             {
                 try
                 {
-                    await PreRenderNextWallpaperAsync();
+                    await PreRenderNextWallpaperAsync(preRenderToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    Logger.LogInformation("次回適用分の事前レンダリングがキャンセルされました。");
                 }
                 catch
                 {
@@ -341,9 +484,13 @@ public sealed class WallpaperManager : IDisposable
                 }
             });
         }
+        catch (OperationCanceledException)
+        {
+            Logger.LogInformation("壁紙更新処理がキャンセルされました。");
+        }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"壁紙更新処理中にエラーが発生しました: {ex.Message}");
+            Logger.LogError(ex, "壁紙更新処理中に例外が発生しました。");
         }
         finally
         {
@@ -354,8 +501,14 @@ public sealed class WallpaperManager : IDisposable
     /// <summary>
     /// 次回適用するための壁紙画像を、各ディスプレイの配置状態に合わせて1枚の巨大なスパン壁紙として事前レンダリングします。
     /// </summary>
-    private async Task PreRenderNextWallpaperAsync()
+    /// <param name="cancellationToken">
+    /// 処理のキャンセルを通知するトークン。自動更新の一時停止時に、実行中の合成処理を打ち切るために使用します。
+    /// キャンセルの判定はモニター単位およびPNGエンコードの直前で行うため、即時に停止するわけではありません。
+    /// </param>
+    private async Task PreRenderNextWallpaperAsync(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         // 壁紙作成の直前に常に最新のディスプレイ構成情報を反映する
         RefreshMonitorInfo();
 
@@ -411,6 +564,10 @@ public sealed class WallpaperManager : IDisposable
         // 2. モニターごとに個別に壁紙を描画して、巨大キャンバスの対応する座標に貼り付ける
         foreach (var monitor in _monitors)
         {
+            // 1モニター分の合成は、画像のデコードを多数伴うため負荷が高い。
+            // 着手前に毎回キャンセルを確認することで、一時停止の要求に速やかに応じられるようにする。
+            cancellationToken.ThrowIfCancellationRequested();
+
             int minImageCount = settings.ProcessingMode switch
             {
                 "None" => 1,
@@ -474,6 +631,10 @@ public sealed class WallpaperManager : IDisposable
                 await UpdateImageLastUsedAsync(path);
             }
         }
+
+        // PNGエンコードは一連の処理の中でも特に負荷が高く、一度始めると中断できない。
+        // 着手前にキャンセルを確認し、不要な負荷の発生を避ける。
+        cancellationToken.ThrowIfCancellationRequested();
 
         // 次回適用予定のスロットに PNG として書き出し
         var nextPath = GetNextSpanPath();
@@ -569,6 +730,13 @@ public sealed class WallpaperManager : IDisposable
                 watcher.Dispose();
             }
             _directoryWatchers.Clear();
+        }
+
+        lock (_preRenderLock)
+        {
+            _preRenderCts?.Cancel();
+            _preRenderCts?.Dispose();
+            _preRenderCts = null;
         }
 
         _disposed = true;
