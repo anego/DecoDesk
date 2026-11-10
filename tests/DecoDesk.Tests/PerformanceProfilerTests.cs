@@ -218,7 +218,8 @@ public sealed class PerformanceProfilerTests : IDisposable
     public void SettingsMigration_ShouldConvertSingleTargetDirectoryToMultipleList()
     {
         var settingsFile = Path.Combine(_tempDir, "migration_settings.json");
-        var legacyJson = "{\"TargetDirectory\":\"C:\\\\Users\\\\sefer\\\\Pictures\",\"UpdateIntervalSeconds\":60}";
+        const string legacyDirectory = @"C:\Users\TestUser\Pictures";
+        var legacyJson = "{\"TargetDirectory\":\"C:\\\\Users\\\\TestUser\\\\Pictures\",\"UpdateIntervalSeconds\":60}";
         File.WriteAllText(settingsFile, legacyJson);
 
         var manager = new DecoDesk.Configuration.SettingsManager(settingsFile);
@@ -226,7 +227,7 @@ public sealed class PerformanceProfilerTests : IDisposable
 
         Assert.NotNull(settings.TargetDirectories);
         Assert.Single(settings.TargetDirectories);
-        Assert.Equal("C:\\Users\\sefer\\Pictures", settings.TargetDirectories[0]);
+        Assert.Equal(legacyDirectory, settings.TargetDirectories[0]);
     }
 
     /// <summary>
