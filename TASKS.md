@@ -58,36 +58,65 @@
 - [x] F-4. 「保存して適用」で壁紙の再生成が走る際、処理完了まで設定画面が閉じずブロックされる問題を改善。再生成を`Task.Run`でバックグラウンド化し、先にメッセージを表示して画面を閉じ、完了/失敗はタスクトレイ通知で知らせるようにした。
 - [x] F-5. タスクトレイのコンテキストメニューに「バージョン情報」を追加し、アプリ名・バージョン・実行環境を表示する`VersionWindow`を実装した。あわせて`DecoDesk.csproj`に`<Version>1.0.0</Version>`を明示した。
 - [x] F-6. 推移的依存の`SQLitePCLRaw.lib.e_sqlite3` 2.1.11 に既知の脆弱性（CVE-2025-6965 / NU1903）があったため、`Microsoft.Data.Sqlite`を 10.0.9 → 10.0.11 へ更新し、依存を 2.1.12 に引き上げて警告を解消した。
+- [x] F-7. ゲームプレイ中に壁紙生成の処理負荷でラグが生じる問題に対応。最大の負荷源は壁紙適用の直後に毎回走る `PreRenderNextWallpaperAsync`（1モニターあたり最大40枚のデコード＋巨大ビットマップのPNGエンコード）であるため、これを止められるようにした。
+      - **手動一時停止**: タスクトレイメニューに「自動更新を一時停止」をトグル項目として追加。`WallpaperManager.PauseAutoUpdate` / `ResumeAutoUpdate` を実装。停止中はツールチップにも状態を表示する。
+      - **実行中処理のキャンセル**: `PreRenderNextWallpaperAsync` に `CancellationToken` を通し、一時停止時に実行中の合成処理を打ち切るようにした。これがないと「ゲーム開始直前に停止を押す」という最も自然な使い方で、押した直後に負荷が残ってしまう。キャンセル判定はモニター単位とPNGエンコード直前の2箇所（`WallpaperRenderer` 側は状態を持たない純粋関数として維持するため、トークンを渡していない）。
+      - **`RestartTimer` の一時停止尊重**: `SaveSettings` から `RestartTimer` が呼ばれるため、一時停止中に設定を保存するとタイマーが復活してしまう不具合があった。一時停止中はタイマーを張らないようにした。
+      - **全画面アプリの自動検出**: `FullScreenDetector` を新規作成し、`SHQueryUserNotificationState` で全画面アプリ（`QUNS_BUSY` / `QUNS_RUNNING_D3D_FULL_SCREEN` / `QUNS_PRESENTATION_MODE`）を検出している間はタイマー発火をスキップする。手動停止の押し忘れを防ぐため。ボーダーレスウィンドウのゲームは検出できない場合があるため、手動停止と併用する構成とした。
+      - **再開時の事前生成**: 再開時にバッファが失われている場合、次回のタイマー発火時に同期フォールバックが走って切り替えが遅延するため、再開直後にバックグラウンドで再生成する。
+      - 一時停止の状態は**永続化しない**。設定画面の「自動更新を有効にする」が恒久的なON/OFFを担っており、永続化すると役割が重複して「どちらで切ったか分からない」状態を生むため。
+      - あわせて、`TriggerUpdateNowAsync` の例外処理が `System.Diagnostics.Debug.WriteLine` を使っていた箇所を `Logger.LogError` に修正した（`.claude/rules/05-logging.md` 違反）。
 
 ## リリース v1.0.0（2026-08-24〜）
 
 配布方針: **自己完結・単一ファイル（self-contained + single-file, win-x64）** / 配布先: **GitHub Releases**
 
 ### RL-A. 品質確認（最優先）
-- [x] A-1. 実行中の `DecoDesk.exe` を終了し、`dotnet build src/DecoDesk/DecoDesk.csproj -c Debug` を警告ゼロで完走させる（実行中はexeがロックされ`_wpftmp.csproj`が残留してビルドが不安定になる）。→ **0警告0エラーで成功**。なお `obj` を削除した直後の初回ビルドのみ、WPFのマークアップコンパイル（`_wpftmp` 一時プロジェクト経由での `.g.cs` 生成）が本体のコンパイルに間に合わず `error CS2001: App.g.cs が見つかりませんでした` が発生する。2回目以降のビルドは成功するため、コード側の問題ではない。
-- [x] A-2. `dotnet test` を実行し、`tests/DecoDesk.Tests` の全テストがPassすることを確認する。→ **16件すべて成功（失敗0・スキップ0）**。
+- [x] A-1. 実行中の `DecoDesk.exe` を終了し、`dotnet build src/DecoDesk/DecoDesk.csproj -c Debug` を警告ゼロで完走させる（実行中はexeがロックされ`_wpftmp.csproj`が残留してビルドが不安定になる）。→ **0警告0エラーで成功**。F-7 実装後にも再確認済み。なお `obj` を削除した直後の初回ビルドのみ、WPFのマークアップコンパイル（`_wpftmp` 一時プロジェクト経由での `.g.cs` 生成）が本体のコンパイルに間に合わず `error CS2001: App.g.cs が見つかりませんでした` が発生する。2回目以降のビルドは成功するため、コード側の問題ではない。
+- [x] A-2. `dotnet test` を実行し、`tests/DecoDesk.Tests` の全テストがPassすることを確認する。→ **16件すべて成功（失敗0・スキップ0）**。ただしこれは F-6 時点での結果であり、**F-7 の実装後は未実行**（A-4 で再確認する）。
 - [x] A-3. テスト失敗があれば修正する。→ 失敗がなかったため対応不要。
+- [x] A-4. **F-7（自動更新の一時停止・全画面検出）実装後のテスト再実行。** → **ビルド0警告0エラー、テスト16件すべて成功（失敗0・スキップ0）**。`obj`/`bin` をクリーンした状態から確認済み。
 
 ### RL-B. リポジトリ整備
-- [ ] B-1. 誤コミットされている `src/DecoDesk/DecoDesk_zs52vh3a_wpftmp.csproj` をリポジトリから削除し、`.gitignore` に `*_wpftmp.csproj` を追加して再発を防ぐ。
-- [ ] B-2. 作業メモ `2026-07-11.md` / `MEMO.md` の扱いを決める（削除 / `doc/` へ移動 / `.gitignore`）。
-- [ ] B-3. 未コミットの変更（F-2〜F-6）を Conventional Commits 形式でコミットする。
-- [ ] B-4. `p-7` を `master` へマージする（現状 master に2コミット未反映）。
-- [ ] B-5. `v1.0.0` タグを作成する。
+- [x] B-1. 誤コミットされている `src/DecoDesk/DecoDesk_zs52vh3a_wpftmp.csproj` をリポジトリから削除し、`.gitignore` に `*_wpftmp.csproj` を追加して再発を防ぐ。→ ファイル削除は `e0092fc`、`.gitignore` 追記は `39a50bd` で対応済み。
+- [x] B-2. 作業メモ `2026-07-11.md` / `MEMO.md` の扱いを決める。→ **git管理に含めない方針**とし、`.gitignore` に追加（`39a50bd`）。
+- [x] B-3. 未コミットの変更（F-2〜F-6）を Conventional Commits 形式でコミットする。→ `e0092fc` / `55ee76b` / `39a50bd` で対応済み。
+- [x] B-4. `p-7` を `master` へマージする。→ 完了。`master` が `39a50bd` となり `p-7` の全内容を含む。
+- [ ] B-6. **F-7 とリリース関連ドキュメントのコミット。** `39a50bd` 以降が未コミットのまま9ファイル溜まっている。
+      - 新規: `CHANGELOG.md`, `LICENSE`, `src/DecoDesk/OS/FullScreenDetector.cs`
+      - 変更: `README.md`, `DEVELOP.md`, `TASKS.md`, `src/DecoDesk/DecoDesk.csproj`, `src/DecoDesk/NotifyIconWrapper.cs`, `src/DecoDesk/OS/WallpaperManager.cs`
+      - 機能追加（F-7）とドキュメント整備は性質が異なるため、`feat:` と `docs:` の2コミットに分けるのが望ましい。
+- [ ] B-5. （RL-C・RL-D の完了後に実施）`v1.0.0` タグを作成する。
+      **タグは RL-B の最後ではなく、README・LICENSE の整備と配布物の動作確認を終えてから打つこと。** GitHub Releases はタグを起点に公開されるため、先にタグを打つと README も LICENSE も含まれない状態が `v1.0.0` として固定されてしまう。
 
 ### RL-C. 配布物の作成
-- [ ] C-1. `dotnet publish` の設定を確定する。WPF + SkiaSharp + SQLite のネイティブライブラリを同梱するため `-p:IncludeNativeLibrariesForSelfExtract=true` が必要。WPFはトリミング非対応のため `PublishTrimmed` は使用しない。
+- [x] C-1. `dotnet publish` の設定を確定する。→ 設定を `DecoDesk.csproj` に集約し、publish コマンドを以下まで簡略化した。指定漏れによる壊れた exe の生成を防ぐため、CLIオプションではなく csproj 側に持たせている。
       ```
-      dotnet publish src/DecoDesk/DecoDesk.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+      dotnet publish src/DecoDesk/DecoDesk.csproj -c Release -r win-x64 --self-contained true
       ```
+      - `IncludeNativeLibrariesForSelfExtract=true`: SkiaSharp（`libSkiaSharp.dll`）と SQLite（`e_sqlite3.dll`）のネイティブ依存を同梱するため必須。
+      - `EnableCompressionInSingleFile=true`: **179.8MB → 78.2MB（56%削減）**。常駐アプリのため初回展開時の起動コストは実用上問題にならない。
+      - `PublishTrimmed` は WPF が非対応のため使用しない。
+      - `RemovePdbFromPublishOutput` ターゲット: SkiaSharp のネイティブ debug シンボル `libSkiaSharp.pdb`（約85MB）が publish 出力に混入するため除去する。結果、出力は `DecoDesk.exe` 単一ファイルのみ。
+      - 生成物の確認: FileVersion `1.0.0.0` / ProductVersion `1.0.0+<commit>`。Debugビルド・テスト16件に回帰なし。
 - [ ] C-2. 生成された単一exeを、ビルド環境の`bin`に依存しない場所（例: デスクトップ）へコピーして起動し、正常に動作することを確認する。
-- [ ] C-3. 配布用zipを作成する（exe + README + LICENSE）。
+      対象: `src/DecoDesk/bin/Release/net10.0-windows/win-x64/publish/DecoDesk.exe`
+      ネイティブライブラリの自己展開が正しく動くかはここで初めて分かるため、**RL-E の手動確認より先に最低限の起動確認を行うこと。**
+      **※ 現在の publish 出力は 2026/08/24 時点のもので F-7 を含んでいない。publish のやり直しが必須。**
+      **※ publish は B-6 のコミット後に行うこと。** ProductVersion に `1.0.0+<commit>` の形でコミットハッシュが埋め込まれるため、コミット前に publish すると配布物が古いコミットを指してしまう。
+- [ ] C-3. 配布用zipを作成する（exe + README + LICENSE）。※ D-1・D-2 の完了が前提。
 
 ### RL-D. ドキュメント
-- [ ] D-1. `README.md` を拡充する。機能概要、スクリーンショット、動作要件、導入手順、基本的な使い方、設定・DBの保存場所（`%LOCALAPPDATA%\DecoDesk\`）、アンインストール手順を記載する。
-- [ ] D-2. `LICENSE` を追加する（ライセンス種別の決定が必要）。
-- [ ] D-3. `DEVELOP.md` の記述を実態に合わせて修正する。テストプロジェクトのパスが `src/DecoDesk.Tests` となっているが、実際は `tests/DecoDesk.Tests`。またリリースビルドのコマンドを C-1 の内容に更新する。
-- [ ] D-4. リリースノート（CHANGELOG）を作成する。
+- [x] D-1. `README.md` を拡充する。→ 機能概要、動作要件、インストール、タスクトレイメニュー、初回セットアップ手順、One-shotモード、データ保存場所、アンインストール手順、使用ライブラリ、ライセンスを記載した。
+      - 「元の画像ファイルは変更・削除されない」旨を明記した。画像フォルダを指定させるアプリのため、利用者が最も不安に感じる点であるため。
+      - 署名なしexeのため SmartScreen 警告が出ることを事前に案内した。
+      - **スクリーンショットは未添付。** 設定画面と生成された壁紙の例を後で追加すること。
+- [x] D-2. `LICENSE` を追加する。→ **MIT License**（Copyright (c) 2026 anego）。依存する SkiaSharp（MIT）とも整合する。
+- [x] D-3. `DEVELOP.md` の記述を実態に合わせて修正する。→ 以下を修正した。
+      - テストプロジェクトのパスを `src/DecoDesk.Tests` → `tests/DecoDesk.Tests` に修正し、構築済みである旨に書き換えた。
+      - リリースビルドのコマンドを `--self-contained false` → `--self-contained true` に修正し、csproj に集約した各設定の意図を表で説明した。
+      - 「既知のビルド上の注意点」を新設し、アプリ実行中のビルド失敗と、`obj` 削除直後の初回ビルド失敗（`error CS2001`）を記載した。
+- [x] D-4. リリースノート（CHANGELOG）を作成する。→ `CHANGELOG.md` を新規作成し、v1.0.0 の内容を記載した。
 
 ### RL-E. 手動動作確認
 - [ ] E-1. マルチモニター環境で、加工モード3種（加工なし / ポストカード風 / コルクボード風）それぞれの壁紙適用を確認する。
@@ -96,9 +125,17 @@
 - [ ] E-4. 二重起動防止（Mutex）、バージョン情報ダイアログの表示を確認する。
 - [ ] E-5. 大量画像でインデックス作成を実行し、進捗表示とタスクトレイ通知が正しく動作することを確認する。
 - [ ] E-6. 設定画面での未編集時の保存ボタン無効化（F-2）と、フォルダ変更時のバックグラウンド再生成＋通知（F-4）を確認する。
+- [ ] E-7. 自動更新の一時停止（F-7）を確認する。
+      - メニューから一時停止 → チェックが付き、ツールチップが「自動更新を一時停止中」になる。更新間隔を10秒などに短くしても壁紙が変わらない。
+      - 再開 → チェックが外れ、以降は通常どおり更新される。
+      - **一時停止中に設定画面を開いて「保存して適用」 → 停止状態が維持される**（`RestartTimer` による復活がないこと）。
+      - 一時停止中でも「今すぐ変更」が動作する。
+- [ ] E-8. 全画面アプリの自動検出（F-7）を確認する。更新間隔を10秒などに短くした状態で全画面のゲームを起動し、壁紙が切り替わらないこと、終了後に再開することを確認する。ログ（`%TEMP%\DecoDesk\log_*.txt`）に「全画面アプリケーションの動作を検出したため、壁紙の更新を見送ります」が記録される。
+      - ボーダーレスウィンドウのゲームでは検出されない場合がある。その挙動も確認し、README の記述と合っているかを見る。
 
 ### RL-F. GitHub 公開
-- [ ] F-1. `gh auth login` を実行して GitHub CLI にログインする（GitHub CLI はインストール済みだが未ログイン。対話が必要なため手動実行）。
-- [ ] F-2. GitHub にリポジトリを作成し、`git remote add origin` でリモートを登録して push する（現状リモート未登録）。
+- [x] F-1. `gh auth login` を実行して GitHub CLI にログインする。→ 完了。account `anego` でログイン済み。
+- [ ] F-2. GitHub にリポジトリを作成し、`git remote add origin` でリモートを登録して push する。
+      リポジトリは未作成（`gh repo list` に DecoDesk は存在しない）。リモートも未登録。公開/非公開の選択が必要。
 - [ ] F-3. push 前に、コミット対象に秘密情報や不要な個人パスが含まれていないか確認する。
 - [ ] F-4. GitHub Releases で `v1.0.0` を作成し、配布用zipを添付する。

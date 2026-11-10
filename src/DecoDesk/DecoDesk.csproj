@@ -11,11 +11,37 @@
     <Version>1.0.0</Version>
   </PropertyGroup>
 
+  <!--
+    リリース配布用の publish 設定です。これらは `dotnet publish` 時のみ効果があり、
+    通常の `dotnet build` には影響しません。
+    SkiaSharp（libSkiaSharp.dll）と SQLite（e_sqlite3.dll）がネイティブ依存のため、
+    IncludeNativeLibrariesForSelfExtract を有効にしないと単一ファイル化しても実行時に失敗します。
+    なお WPF はトリミング（PublishTrimmed）に対応していないため使用しません。
+  -->
+  <PropertyGroup>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
     <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.9" />
     <PackageReference Include="SkiaSharp" Version="4.150.0" />
     <Resource Include="icon.ico" />
   </ItemGroup>
+
+  <!--
+    SkiaSharp のネイティブランタイムパッケージが同梱する libSkiaSharp.pdb（約85MB）は
+    デバッグシンボルであり配布物には不要なため、publish 後に出力ディレクトリから除去します。
+    これにより publish 出力は単一の DecoDesk.exe のみとなります。
+  -->
+  <Target Name="RemovePdbFromPublishOutput" AfterTargets="Publish">
+    <ItemGroup>
+      <_PublishPdbFiles Include="$(PublishDir)**\*.pdb" />
+    </ItemGroup>
+    <Delete Files="@(_PublishPdbFiles)" />
+  </Target>
 
 </Project>

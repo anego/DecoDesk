@@ -36,35 +36,44 @@ dotnet run --project src/DecoDesk/DecoDesk.csproj
 
 ### 2-2. リリースビルドの生成
 
-最適化された単一実行ファイル（またはポータブルファイル）を生成します。
+配布用の「自己完結・単一実行ファイル」を生成します。
 
 ```powershell
-dotnet publish src/DecoDesk/DecoDesk.csproj -c Release -r win-x64 --self-contained false
+dotnet publish src/DecoDesk/DecoDesk.csproj -c Release -r win-x64 --self-contained true
 ```
+
+出力先: `src/DecoDesk/bin/Release/net10.0-windows/win-x64/publish/DecoDesk.exe`（約78MB、単一ファイル）
+
+publish に関する詳細な設定は `DecoDesk.csproj` 側に集約しているため、上記以外のオプション指定は不要です。指定漏れによって起動しない exe が生成されるのを防ぐ意図があります。
+
+| 設定 | 目的 |
+| --- | --- |
+| `PublishSingleFile` | 単一の exe にまとめる |
+| `IncludeNativeLibrariesForSelfExtract` | **必須。** SkiaSharp（`libSkiaSharp.dll`）と SQLite（`e_sqlite3.dll`）のネイティブ依存を同梱する。これがないと単一ファイル化しても実行時に失敗する |
+| `EnableCompressionInSingleFile` | 179.8MB → 78.2MB に圧縮。常駐アプリのため初回展開時の起動コストは実用上問題にならない |
+| `RemovePdbFromPublishOutput` ターゲット | SkiaSharp のネイティブ debug シンボル `libSkiaSharp.pdb`（約85MB）が publish 出力に混入するため除去する |
+
+> **注意:** WPF はトリミング（`PublishTrimmed`）に対応していないため使用できません。
+
+### 2-3. 既知のビルド上の注意点
+
+* **アプリ実行中はビルドできません。** DecoDesk が常駐している状態でビルドすると `DecoDesk.exe` がロックされ、`error MSB3027 / MSB3021` でコピーに失敗します。さらに WPF の一時プロジェクト（`DecoDesk_xxxx_wpftmp.csproj`）がプロジェクト直下に残留し、以降のビルドが不安定になります。ビルド前にタスクトレイから終了してください。
+* **`obj` を削除した直後の初回ビルドは失敗することがあります。** WPF のマークアップコンパイルによる `.g.cs` の生成が本体のコンパイルに間に合わず、`error CS2001: App.g.cs が見つかりませんでした` が発生します。**もう一度ビルドすれば成功します。** コード側の問題ではありません。
 
 ## 3. テスト手法 I: 自動化テスト (xUnit)
 
 ドメインロジック（画像パスの解析、高速なSQLiteクエリの構築、設定のパースなど）は、UIに依存しない形で分離し、自動テストで品質を担保します。
 
-### 3-1. テストプロジェクトのセットアップ（初回のみ）
+### 3-1. テストプロジェクトの構成
 
-```powershell
-# テストプロジェクトの作成
-dotnet new xunit -n DecoDesk.Tests -o src/DecoDesk.Tests
-
-# メインプロジェクトへの参照を追加
-dotnet add src/DecoDesk.Tests/DecoDesk.Tests.csproj reference src/DecoDesk/DecoDesk.csproj
-
-# ソリューションへの追加
-dotnet sln add src/DecoDesk.Tests/DecoDesk.Tests.csproj
-```
+テストプロジェクトは `tests/DecoDesk.Tests/` に構築済みで、ソリューション `src/DecoDesk.slnx` に登録されています。新規セットアップは不要です。
 
 ### 3-2. テストの実行
 
 AIエージェントにロジックを実装させた後は、必ず以下のコマンドで全テストがPassするか確認させてください。
 
 ```powershell
-dotnet test
+dotnet test tests/DecoDesk.Tests/DecoDesk.Tests.csproj
 ```
 
 ## 4. テスト手法 II: 手動・UI動作テスト
