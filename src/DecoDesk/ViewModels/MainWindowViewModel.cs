@@ -40,6 +40,7 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     private bool _isDirty;
     private bool _isRenderDirty;
+    private bool _isIndexDirty;
     private bool _isLoaded;
 
     /// <summary>
@@ -417,7 +418,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         RemoveDirectoryCommand = new RelayCommand(RemoveDirectory, () => !IsIndexing && SelectedDirectory != null);
 
         // 対象ディレクトリの追加・削除も「未保存の変更」として検知する（壁紙合成に影響するため再レンダリング対象）
-        _targetDirectories.CollectionChanged += (_, _) => MarkDirty(affectsRendering: true);
+        // 対象フォルダの増減は、壁紙の見た目だけでなく画像インデックスの対象範囲そのものを変える。
+        // インデックスを更新しないまま壁紙を再生成すると変更前のフォルダの画像が使われ続けるため、両方をマークする。
+        _targetDirectories.CollectionChanged += (_, _) => MarkDirty(affectsRendering: true, affectsIndex: true);
 
         // 保存された設定のロード
         LoadSettings();
@@ -427,7 +430,8 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// 設定読み込み完了後の変更を「未保存」としてマークします。読み込み処理中の変更は対象外とします。
     /// </summary>
     /// <param name="affectsRendering">壁紙の見た目（合成結果）に影響する設定項目の変更かどうか</param>
-    private void MarkDirty(bool affectsRendering = false)
+    /// <param name="affectsIndex">画像インデックスの対象範囲に影響する設定項目の変更かどうか</param>
+    private void MarkDirty(bool affectsRendering = false, bool affectsIndex = false)
     {
         if (!_isLoaded)
         {
@@ -438,6 +442,10 @@ public sealed class MainWindowViewModel : ViewModelBase
         if (affectsRendering)
         {
             _isRenderDirty = true;
+        }
+        if (affectsIndex)
+        {
+            _isIndexDirty = true;
         }
     }
 
@@ -480,6 +488,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         _isLoaded = true;
         IsDirty = false;
         _isRenderDirty = false;
+        _isIndexDirty = false;
     }
 
     /// <summary>
@@ -541,30 +550,25 @@ public sealed class MainWindowViewModel : ViewModelBase
             // 変更された場合のみ、時間のかかる事前レンダリングバッファの再作成が必要となる
             bool needsRerender = _isRenderDirty;
 
+            // 対象フォルダが変更された場合は、再生成の前にインデックスを現在のフォルダ構成へ同期する必要がある。
+            // これを行わないと、DBに残った変更前のフォルダの画像で壁紙が生成されてしまう。
+            bool needsReindex = _isIndexDirty;
+
             IsDirty = false;
             _isRenderDirty = false;
+            _isIndexDirty = false;
 
             if (needsRerender)
             {
-                System.Windows.MessageBox.Show("設定を保存しました。壁紙の再生成をバックグラウンドで実行します。完了するとタスクトレイに通知します。", "DecoDesk", MessageBoxButton.OK, MessageBoxImage.Information);
+                var message = needsReindex
+                    ? "設定を保存しました。対象フォルダの変更を検知したため、画像インデックスの同期と次回分の壁紙の生成をバックグラウンドで実行します。完了するとタスクトレイに通知します。"
+                    : "設定を保存しました。次回分の壁紙の生成をバックグラウンドで実行します。完了するとタスクトレイに通知します。";
+                System.Windows.MessageBox.Show(message, "DecoDesk", MessageBoxButton.OK, MessageBoxImage.Information);
                 RequestClose?.Invoke();
 
                 // 画面を閉じた後もバックグラウンドで継続し、完了はタスクトレイ通知で知らせる（設定画面をブロックしない）
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        Logger.LogInformation("壁紙の見た目に影響する設定変更を検知したため、事前レンダリングバッファをバックグラウンドで再作成します。");
-                        await OS.WallpaperManager.Instance.RecreatePreRenderedWallpaperAsync();
-                        Logger.LogInformation("バックグラウンドでの事前レンダリングバッファの再作成が完了しました。");
-                        NotifyIconWrapper.Current?.ShowBalloonNotification("DecoDesk", "壁紙の再生成が完了しました。");
-                    }
-                    catch (Exception ex)
-                    {
-                        Logger.LogError(ex, "バックグラウンドでの事前レンダリングバッファの再作成中に例外が発生しました。");
-                        NotifyIconWrapper.Current?.ShowBalloonNotification("DecoDesk", $"壁紙の再生成に失敗しました: {ex.Message}", System.Windows.Forms.ToolTipIcon.Error);
-                    }
-                });
+                var directoriesSnapshot = new System.Collections.Generic.List<string>(settings.TargetDirectories);
+                _ = Task.Run(async () => await SyncAndRegenerateAsync(directoriesSnapshot, needsReindex));
             }
             else
             {
@@ -577,6 +581,47 @@ public sealed class MainWindowViewModel : ViewModelBase
         {
             Logger.LogError(ex, "設定の保存またはタイマーの再起動中に例外が発生しました。");
             System.Windows.MessageBox.Show($"設定の保存に失敗しました: {ex.Message}", "DecoDesk", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    /// <summary>
+    /// 設定保存後のバックグラウンド処理として、必要に応じて画像インデックスを同期したうえで、
+    /// 次回適用分の壁紙を再生成します。
+    /// </summary>
+    /// <remarks>
+    /// 生成した壁紙をその場でデスクトップへ適用することはせず、次回の更新タイミング
+    /// （自動更新タイマーの発火、または「今すぐ変更」）に委ねます。作業中に不意に画面が切り替わるのを避けるためです。
+    /// </remarks>
+    /// <param name="targetDirectories">同期対象のフォルダ一覧。UIスレッドが所有するコレクションを
+    /// バックグラウンドから参照しないよう、呼び出し元で複製したものを受け取ります。</param>
+    /// <param name="needsReindex">画像インデックスの同期が必要かどうか</param>
+    private async Task SyncAndRegenerateAsync(System.Collections.Generic.IReadOnlyList<string> targetDirectories, bool needsReindex)
+    {
+        try
+        {
+            int indexedCount = 0;
+
+            if (needsReindex)
+            {
+                Logger.LogInformation("対象フォルダの変更を検知したため、画像インデックスをバックグラウンドで同期します。対象ディレクトリ数={DirectoryCount}", targetDirectories.Count);
+
+                // 進捗UIは設定画面を閉じた時点で参照されなくなるため、進捗通知は渡さず戻り値の件数のみを使用する
+                indexedCount = await _indexer.RunIndexAsync(targetDirectories);
+            }
+
+            Logger.LogInformation("事前レンダリングバッファをバックグラウンドで再作成します。");
+            await OS.WallpaperManager.Instance.RecreatePreRenderedWallpaperAsync();
+            Logger.LogInformation("バックグラウンドでの事前レンダリングバッファの再作成が完了しました。");
+
+            var message = needsReindex
+                ? $"画像データベースを同期し（{indexedCount:N0}ファイルを登録）、次回分の壁紙を生成しました。次回の更新から反映されます。"
+                : "新しい設定で次回分の壁紙を生成しました。次回の更新から反映されます。";
+            NotifyIconWrapper.Current?.ShowBalloonNotification("DecoDesk", message);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "設定保存後のインデックス同期または事前レンダリングバッファの再作成中に例外が発生しました。");
+            NotifyIconWrapper.Current?.ShowBalloonNotification("DecoDesk", $"設定変更の反映に失敗しました: {ex.Message}", System.Windows.Forms.ToolTipIcon.Error);
         }
     }
 
@@ -614,6 +659,27 @@ public sealed class MainWindowViewModel : ViewModelBase
             // 設定画面を閉じていても完了が分かるよう、タスクトレイ通知で知らせる（モーダルダイアログは表示しない）
             var indexedCount = lastProgress?.IndexedCount ?? 0;
             NotifyIconWrapper.Current?.ShowBalloonNotification("DecoDesk", $"画像データベースの同期が完了しました。（{indexedCount:N0}ファイルを登録）");
+
+            // インデックスの内容が入れ替わったため、既存の事前レンダリングバッファは
+            // 更新前のインデックスに含まれていた画像で生成されたものとなっている。
+            // そのまま放置すると次回の壁紙適用時に一度だけ古い画像が表示されてしまうため、破棄して作り直す。
+            // 登録件数が0件の場合は生成できる壁紙が存在しないため、既存のバッファを残す。
+            if (indexedCount > 0)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        Logger.LogInformation("インデックスが更新されたため、事前レンダリングバッファをバックグラウンドで作り直します。");
+                        await OS.WallpaperManager.Instance.RecreatePreRenderedWallpaperAsync();
+                        Logger.LogInformation("インデックス更新に伴う事前レンダリングバッファの再作成が完了しました。");
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogError(ex, "インデックス更新に伴う事前レンダリングバッファの再作成中に例外が発生しました。");
+                    }
+                });
+            }
         }
         catch (OperationCanceledException)
         {

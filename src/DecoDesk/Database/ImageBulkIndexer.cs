@@ -19,6 +19,13 @@ public sealed class ImageBulkIndexer
     private const int BatchSize = 2000;
 
     /// <summary>
+    /// インデックス同期の同時実行を防ぐためのセマフォです。
+    /// 設定保存に伴う自動同期と、設定画面からの手動同期が重なると、
+    /// 孤立レコードの削除とバルクInsertが互いのトランザクションと競合するため直列化します。
+    /// </summary>
+    private static readonly SemaphoreSlim IndexGate = new(1, 1);
+
+    /// <summary>
     /// <see cref="ImageBulkIndexer"/> クラスの新しいインスタンスを初期化します。
     /// </summary>
     /// <param name="dbManager">使用するデータベースマネージャー</param>
@@ -40,13 +47,48 @@ public sealed class ImageBulkIndexer
     /// <param name="rootPaths">走査するルートディレクトリのパスのリスト</param>
     /// <param name="progress">進捗を通知するプログレス通知インターフェース</param>
     /// <param name="cancellationToken">キャンセル要求を監視するためのトークン</param>
-    public async Task RunIndexAsync(System.Collections.Generic.IEnumerable<string> rootPaths, IProgress<IndexProgress>? progress = null, CancellationToken cancellationToken = default)
+    /// <returns>データベースに登録された画像ファイルの件数</returns>
+    public async Task<int> RunIndexAsync(System.Collections.Generic.IEnumerable<string> rootPaths, IProgress<IndexProgress>? progress = null, CancellationToken cancellationToken = default)
     {
+        // 同時実行を防ぐため、先行する同期の完了を待ってから処理を開始する
+        if (!await IndexGate.WaitAsync(0, cancellationToken))
+        {
+            Logger.LogInformation("ほかのインデックス同期が実行中のため、完了を待機します。");
+            await IndexGate.WaitAsync(cancellationToken);
+        }
+
+        try
+        {
+            return await RunIndexCoreAsync(rootPaths, progress, cancellationToken);
+        }
+        finally
+        {
+            IndexGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// インデックス同期の本体です。呼び出し元で <see cref="IndexGate"/> による直列化が行われている前提とします。
+    /// </summary>
+    /// <param name="rootPaths">走査するルートディレクトリのパスのリスト</param>
+    /// <param name="progress">進捗を通知するプログレス通知インターフェース</param>
+    /// <param name="cancellationToken">キャンセル要求を監視するためのトークン</param>
+    /// <returns>データベースに登録された画像ファイルの件数</returns>
+    private async Task<int> RunIndexCoreAsync(System.Collections.Generic.IEnumerable<string> rootPaths, IProgress<IndexProgress>? progress, CancellationToken cancellationToken)
+    {
+        var rootPathList = new System.Collections.Generic.List<string>(rootPaths);
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        Logger.LogInformation("画像インデックスの同期を開始します。対象ディレクトリ数={DirectoryCount}", rootPathList.Count);
+
         // データベースの初期化を確認
         await _dbManager.InitializeAsync();
 
         // 走査対象外（リストから除外されたフォルダ等）の不要なレコードをDBからクリーンアップ
-        await DeleteOrphanedRecordsAsync(rootPaths);
+        var deletedCount = await DeleteOrphanedRecordsAsync(rootPathList);
+        if (deletedCount > 0)
+        {
+            Logger.LogInformation("登録ディレクトリ配下に存在しない画像レコードを削除しました。削除件数={DeletedCount}", deletedCount);
+        }
 
         using var connection = _dbManager.CreateConnection();
         await connection.OpenAsync(cancellationToken);
@@ -75,12 +117,15 @@ public sealed class ImageBulkIndexer
             transaction = connection.BeginTransaction();
             insertCommand.Transaction = transaction;
 
-            foreach (var rootPath in rootPaths)
+            foreach (var rootPath in rootPathList)
             {
                 if (string.IsNullOrWhiteSpace(rootPath) || !Directory.Exists(rootPath))
                 {
+                    Logger.LogWarning("登録ディレクトリにアクセスできないため、走査をスキップしました。パス={Path}", rootPath);
                     continue;
                 }
+
+                Logger.LogDebug("ディレクトリの走査を開始します。パス={Path}", rootPath);
 
                 // 1. ファイルを列挙する
                 var imageFiles = FileEnumerator.EnumerateImageFiles(rootPath);
@@ -139,20 +184,30 @@ public sealed class ImageBulkIndexer
             }
 
             progress?.Report(new IndexProgress(foundCount, indexedCount));
+
+            stopwatch.Stop();
+            Logger.LogInformation(
+                "画像インデックスの同期が完了しました。検出={FoundCount}件, 登録={IndexedCount}件, スキップ={SkippedCount}件, 所要時間={ElapsedMilliseconds}ms",
+                foundCount, indexedCount, foundCount - indexedCount, stopwatch.ElapsedMilliseconds);
+
+            return indexedCount;
         }
-        catch
+        catch (OperationCanceledException)
         {
-            if (transaction != null)
-            {
-                try
-                {
-                    await transaction.RollbackAsync(cancellationToken);
-                }
-                catch
-                {
-                    // ロールバック失敗は無視
-                }
-            }
+            await RollbackQuietlyAsync(transaction);
+            stopwatch.Stop();
+            Logger.LogInformation(
+                "画像インデックスの同期がキャンセルされました。検出={FoundCount}件, 登録={IndexedCount}件, 所要時間={ElapsedMilliseconds}ms",
+                foundCount, indexedCount, stopwatch.ElapsedMilliseconds);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            await RollbackQuietlyAsync(transaction);
+            stopwatch.Stop();
+            Logger.LogError(ex,
+                "画像インデックスの同期中に例外が発生したため、処理を中断しました。検出={FoundCount}件, 登録={IndexedCount}件",
+                foundCount, indexedCount);
             throw;
         }
         finally
@@ -163,9 +218,34 @@ public sealed class ImageBulkIndexer
     }
 
     /// <summary>
+    /// トランザクションのロールバックを試み、失敗しても例外を伝播させずに記録のみ行います。
+    /// 元の失敗原因を上位へ伝えるため、ロールバック自体の失敗で処理を止めないようにしています。
+    /// </summary>
+    /// <param name="transaction">ロールバック対象のトランザクション（null 可）</param>
+    private static async Task RollbackQuietlyAsync(SqliteTransaction? transaction)
+    {
+        if (transaction == null)
+        {
+            return;
+        }
+
+        try
+        {
+            // キャンセル済みのトークンを渡すとロールバック自体が失敗するため、トークンは渡さない
+            await transaction.RollbackAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "トランザクションのロールバックに失敗しました。未コミットの変更は破棄されます。");
+        }
+    }
+
+    /// <summary>
     /// 指定されたすべての登録ディレクトリ配下に属さない古い画像レコードをデータベースから削除します。
     /// </summary>
-    private async Task DeleteOrphanedRecordsAsync(System.Collections.Generic.IEnumerable<string> rootPaths)
+    /// <param name="rootPaths">有効な登録ディレクトリのパス一覧</param>
+    /// <returns>削除されたレコード件数。クリーンアップをスキップした場合は 0</returns>
+    private async Task<int> DeleteOrphanedRecordsAsync(System.Collections.Generic.IEnumerable<string> rootPaths)
     {
         using var connection = _dbManager.CreateConnection();
         await connection.OpenAsync();
@@ -199,13 +279,13 @@ public sealed class ImageBulkIndexer
             // 有効な登録ディレクトリが1件も無い場合、WHERE句なしの全件DELETEを実行すると
             // データベースの内容を全消去してしまうため、安全のため何もせず処理を中断する。
             Logger.LogWarning("有効な登録ディレクトリが存在しないため、孤立レコードのクリーンアップをスキップしました。");
-            return;
+            return 0;
         }
 
         sql.Append(" WHERE ");
         sql.Append(string.Join(" AND ", conditions));
 
         command.CommandText = sql.ToString();
-        await command.ExecuteNonQueryAsync();
+        return await command.ExecuteNonQueryAsync();
     }
 }
