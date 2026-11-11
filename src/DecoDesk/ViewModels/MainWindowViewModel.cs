@@ -573,7 +573,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             else
             {
                 Logger.LogInformation("壁紙の見た目に影響する設定変更がなかったため、事前レンダリングの再作成をスキップしました。");
-                System.Windows.MessageBox.Show("設定を適用・保存しました。", "DecoDesk", MessageBoxButton.OK, MessageBoxImage.Information);
+                System.Windows.MessageBox.Show("設定を保存しました。", "DecoDesk", MessageBoxButton.OK, MessageBoxImage.Information);
                 RequestClose?.Invoke();
             }
         }

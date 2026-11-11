@@ -270,7 +270,7 @@
 
         <!-- 下部保存・閉じるボタン -->
         <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
-            <Button Content="保存して適用" Command="{Binding SaveCommand}" IsEnabled="{Binding IsNotIndexing}" Style="{StaticResource AccentButton}" Width="120" Height="32" Margin="0,0,8,0" />
+            <Button Content="保存" Command="{Binding SaveCommand}" IsEnabled="{Binding IsNotIndexing}" Style="{StaticResource AccentButton}" Width="80" Height="32" Margin="0,0,8,0" />
             <Button Content="閉じる" Click="Close_Click" Width="80" Height="32" />
         </StackPanel>
     </Grid>
