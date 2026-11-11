@@ -191,4 +191,16 @@
       - 「インデックス更新」を手動実行 → その後の「今すぐ変更」で古い画像が出ない。
       - ログに「画像インデックスの同期が完了しました。検出=...」が記録される。
 - [ ] G-8. 「保存して適用」ボタンのリネームを検討する。G-1 の取り下げにより、このボタンは保存と生成までを行い、デスクトップへの適用は行わない。名称と実態が一致していない。
-- [ ] G-6. v1.0.1 をリリースする（publish → zip → タグ → `gh release create`）。v1.0.0 は配布済みのためタグは動かさず、新たに `v1.0.1` を切る。
+- [x] G-6. v1.0.1 をリリースする。→ **https://github.com/anego/DecoDesk/releases/tag/v1.0.1**
+      - コミットを3つに分割した（`b8f5d26` fix / `ae1fb34` docs / `06b72ea` chore）。
+      - publish: 単一exe **78.25MB**、`ProductVersion` は `1.0.1+06b72ea...`（HEAD と一致）、pdb の混入なし。
+      - 配布zip: `DecoDesk-v1.0.1-win-x64.zip`（76,471,002 bytes / sha256 `bf6ab682047c4f935ce8b4b93e7bed6cd1049f8c310ebb1cac9e6e5e6cf456fc`）。同梱物は `DecoDesk.exe` / `README.md` / `LICENSE` / `CHANGELOG.md`。
+      - v1.0.0 のタグとリリースはそのまま残した。draft でも prerelease でもない通常リリース。
+
+> **v1.0.1 で問題が見つかった場合のやり直し手順**
+> ```
+> gh release delete v1.0.1 --yes
+> git push --delete origin v1.0.1
+> git tag -d v1.0.1
+> ```
+> 第三者へ配布済みの場合はタグを動かさず `v1.0.2` を切ること。
