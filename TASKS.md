@@ -201,6 +201,19 @@
       - `MEMO.md` / `2026-07-11.md` は一度もコミットされていない。
       - 著作権が問題だった初版スクリーンショットも一度もコミットされていない（差し替え後が初コミット）。
       - **Windows のユーザー名 `sefer` が過去のコミットに残存**（`ecedbe8` / `7225b1f` の `DecoDesk_zs52vh3a_wpftmp.csproj`、`7225b1f` / `e0092fc` の `PerformanceProfilerTests.cs`）。F-3 で現在のコードからは除去済みだが履歴には残る。認証情報ではなくローカルのユーザー名であり、履歴書き換え（全コミットハッシュの変更・タグ再作成・force push）のリスクに見合わないと判断し、**そのまま公開する方針を採用**した。
+      - 2026-11-12 に **PUBLIC** へ変更。https://github.com/anego/DecoDesk
+- [x] G-11. v1.0.2 をリリースする。→ **https://github.com/anego/DecoDesk/releases/tag/v1.0.2**
+      - コミット `aa290f5`。publish は単一exe **78.25MB**、`ProductVersion` は `1.0.2+aa290f5...`（HEAD と一致）。
+      - 配布zip: `DecoDesk-v1.0.2-win-x64.zip`（76,471,451 bytes / sha256 `88782d542352253826d8c248d0eb798fd7b537d4350829dc827a67272169a3d3`）。
+      - publish 時にアプリが起動中で `bin` がロックされていたため、`-p:BaseOutputPath` で出力先を一時ディレクトリへ退避して実行した。アプリを終了せずに配布物を作る回避策として有効。
+
+> **v1.0.2 で問題が見つかった場合のやり直し手順**
+> ```
+> gh release delete v1.0.2 --yes
+> git push --delete origin v1.0.2
+> git tag -d v1.0.2
+> ```
+> **public 公開後は第三者が取得している可能性があるため、タグは動かさず `v1.0.3` を切ること。**
 - [x] G-6. v1.0.1 をリリースする。→ **https://github.com/anego/DecoDesk/releases/tag/v1.0.1**
       - コミットを3つに分割した（`b8f5d26` fix / `ae1fb34` docs / `06b72ea` chore）。
       - publish: 単一exe **78.25MB**、`ProductVersion` は `1.0.1+06b72ea...`（HEAD と一致）、pdb の混入なし。
